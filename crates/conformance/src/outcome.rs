@@ -199,6 +199,48 @@ pub fn borrowed<B: Backend, K: Target>(input: &[u8], arrival: Arrival) -> Outcom
     }))
 }
 
+/// A case's outcome on a borrowing target, judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnBorrowed {
+    /// The answer the case expects.
+    Right,
+    /// The library cannot produce the target: no answer either way.
+    NotBorrowed,
+    /// Another answer, which the section gates as it would an owned one.
+    Wrong,
+}
+
+/// The one rule for a case decoded into a borrowing target (`&str`,
+/// `&[u8]`, a workload's borrowed form).
+///
+/// - Refused as `Unsupported`: the library has no borrowing entry point
+///   (ciborium). Not borrowed, whatever the case expects; its status is
+///   400, so without this it would pass every case expecting a 400.
+/// - Refused by a library that does not borrow this target (`borrows` is
+///   false: it refuses the target where the owned twin of the same bytes,
+///   or a valid body of the same shape, decodes; c2pa_cbor reads through a
+///   `Cursor`, so a `&str` is refused with 422 before anything else is
+///   looked at). Not borrowed either, even where the status happens to be
+///   the expected one: the refusal says nothing about the case.
+/// - Otherwise the expected answer is right, and anything else (another
+///   value, a panic, a refusal of the other class by a library that does
+///   borrow) is wrong.
+#[must_use]
+pub fn on_borrowed(outcome: &Outcome, borrows: bool, right: bool) -> OnBorrowed {
+    match outcome {
+        Outcome::Reject(failure) if failure.class == codecs::Class::Unsupported || !borrows => OnBorrowed::NotBorrowed,
+        _ if right => OnBorrowed::Right,
+        _ => OnBorrowed::Wrong,
+    }
+}
+
+/// Whether `B` borrows target `K`: it decodes `valid`, a body of the shape
+/// the cases damage, into it.
+#[must_use]
+pub fn borrows<B: Backend, K: Target>(valid: &[u8]) -> bool {
+    borrowed::<B, K>(valid, ARRIVALS[0]).is_accept()
+}
+
 /// A decode path, as a plain function so cases can be tabulated.
 pub type Decode = fn(&[u8], Arrival) -> Outcome;
 

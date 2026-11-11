@@ -11,7 +11,9 @@
 //! Decode side: the oracle's bytes decoded owned and borrowed, through both
 //! arrivals, must be the workload's value exactly (for `reject-*`, refused
 //! with its status), except where the library refuses on its own depth limit
-//! (that policy is `depth`'s to report).
+//! (that policy is `depth`'s to report). The borrowed form is judged by
+//! [`crate::outcome::on_borrowed`]: refused where the owned form of the same
+//! bytes decodes, it is not borrowed, recorded and not gated.
 
 use std::marker::PhantomData;
 
@@ -19,7 +21,9 @@ use codecs::{Backend, Format};
 use payloads::Workload;
 use serde_json::{Value, json};
 
-use crate::outcome::{ARRIVALS, BorrowedForm, Outcome, Typed, borrowed, guarded, owned, same_value, to_value};
+use crate::outcome::{
+    ARRIVALS, BorrowedForm, OnBorrowed, Outcome, Typed, borrowed, guarded, on_borrowed, owned, same_value, to_value,
+};
 use crate::record::Section;
 
 /// Bytes either side of the first difference shown in the report.
@@ -124,18 +128,26 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
             payloads::Expect::Reject(_) => None,
         };
         for arrival in ARRIVALS {
+            let owned = owned::<B, Typed<W::Owned>>(&bytes, arrival);
+            // The library borrows the workload unless it decodes the bytes
+            // owned and refuses them borrowed.
+            let borrows = !owned.is_accept();
             let paths = [
-                ("owned", owned::<B, Typed<W::Owned>>(&bytes, arrival)),
+                ("owned", owned),
                 ("borrowed", borrowed::<B, BorrowedForm<W>>(&bytes, arrival)),
             ];
             for (path, outcome) in paths {
                 let case = format!("{}#decode/{path}#{}", W::NAME, arrival.name());
-                section.case();
                 let right = match (&expected, &outcome, W::EXPECT) {
                     (Some(value), Outcome::Accept(got), _) => same_value(value, got),
                     (None, Outcome::Reject(failure), payloads::Expect::Reject(status)) => failure.status() == status,
                     _ => false,
                 };
+                if path == "borrowed" && on_borrowed(&outcome, borrows, right) == OnBorrowed::NotBorrowed {
+                    section.not_borrowed(&case, outcome.describe());
+                    continue;
+                }
+                section.case();
                 if right {
                     continue;
                 }
@@ -145,9 +157,6 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
                 section.differ(&case, want, outcome.describe());
                 match &outcome {
                     Outcome::Panic(message) => section.fail(&case, format!("panicked: {message}")),
-                    Outcome::Reject(failure) if failure.class == codecs::Class::Unsupported => {
-                        section.note(format!("{case}: the library has no such entry point"));
-                    }
                     Outcome::Reject(_) if W::NAME.starts_with("nested-") && W::NAME != "nested-100" => {
                         section.note(format!("{case}: refused past the library's depth limit (see depth)"));
                     }

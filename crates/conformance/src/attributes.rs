@@ -20,11 +20,12 @@ use std::collections::BTreeMap;
 
 use codecs::Backend;
 use codecs::backend::serde_json::SerdeJson;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
 
-use crate::outcome::{ARRIVALS, Decode, Target, Typed, agree, borrowed, owned, to_value};
+use crate::outcome::{ARRIVALS, Decode, OnBorrowed, Target, Typed, agree, borrowed, on_borrowed, owned, to_value};
 use crate::record::Section;
 
 /// `flatten` into a map.
@@ -205,6 +206,37 @@ impl Target for BorrowingTarget {
     }
 }
 
+/// `&str` fields, borrowed in every position: only a library that hands out
+/// a slice of the input decodes one.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BorrowingStr<'a> {
+    /// A name.
+    pub name: &'a str,
+    /// Tags.
+    #[serde(borrow)]
+    pub tags: Vec<&'a str>,
+}
+
+/// [`BorrowingStr`], owned.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OwningStr {
+    /// A name.
+    pub name: String,
+    /// Tags.
+    pub tags: Vec<String>,
+}
+
+/// [`BorrowingStr`] as a decode target.
+#[derive(Debug)]
+pub struct BorrowingStrTarget;
+
+impl Target for BorrowingStrTarget {
+    type Out<'de> = BorrowingStr<'de>;
+    fn view(out: &BorrowingStr<'_>) -> Value {
+        to_value(out)
+    }
+}
+
 /// A type's name, its owned and borrowed decode paths, and its inputs.
 type Case = (
     &'static str,
@@ -376,6 +408,29 @@ fn cases<B: Backend>() -> Vec<Case> {
                 r#"{"name":"x"}"#,
             ],
         ),
+        // No escapes: serde_json borrows every one of these strings, so its
+        // answer is the reference on both paths.
+        (
+            "borrow-str",
+            [
+                (
+                    "owned",
+                    owned::<B, Typed<OwningStr>> as Decode,
+                    owned::<SerdeJson, Typed<OwningStr>> as Decode,
+                ),
+                (
+                    "borrowed",
+                    borrowed::<B, BorrowingStrTarget>,
+                    borrowed::<SerdeJson, BorrowingStrTarget>,
+                ),
+            ],
+            &[
+                r#"{"name":"plain","tags":["a","b"]}"#,
+                "{\"name\":\"\u{e9}t\u{e9}\",\"tags\":[]}",
+                r#"{"name":1,"tags":[]}"#,
+                r#"{"name":"x"}"#,
+            ],
+        ),
     ]
 }
 
@@ -386,23 +441,39 @@ fn cbor_of(input: &str) -> Vec<u8> {
 }
 
 /// Run the section.
+///
+/// Decode: the owned path gates every disagreement with serde_json. The
+/// borrowed path is judged by [`on_borrowed`]: a library that decodes an
+/// input owned but refuses it borrowed does not borrow that target, which is
+/// recorded as not borrowed; every other disagreement gates.
 #[must_use]
 pub fn run<B: Backend>() -> Section {
     let mut section = Section::new("attributes");
     for (type_name, paths, inputs) in cases::<B>() {
+        let [(_, owned_b, owned_r), (_, borrowed_b, borrowed_r)] = paths;
         for (index, input) in inputs.iter().enumerate() {
-            for (path, backend, reference) in paths {
-                for arrival in ARRIVALS {
-                    let name = format!("{type_name}/{index}#{path}#{}", arrival.name());
-                    let r = reference(input.as_bytes(), arrival);
-                    let b = backend(&cbor_of(input), arrival);
-                    section.case();
-                    // A library with no borrowing entry point has no answer
-                    // on the borrowed path.
-                    if matches!(&b, crate::outcome::Outcome::Reject(f) if f.class == codecs::Class::Unsupported) {
-                        continue;
-                    }
-                    if !agree(&r, &b) {
+            let cbor = cbor_of(input);
+            for arrival in ARRIVALS {
+                let owned = owned_b(&cbor, arrival);
+                let name = format!("{type_name}/{index}#owned#{}", arrival.name());
+                let r = owned_r(input.as_bytes(), arrival);
+                section.case();
+                if !agree(&r, &owned) {
+                    section.differ(
+                        &name,
+                        json!({ "input": input, "outcome": r.describe() }),
+                        owned.describe(),
+                    );
+                    section.fail(&name, "outcome differs from serde_json on the same value as JSON");
+                }
+                let name = format!("{type_name}/{index}#borrowed#{}", arrival.name());
+                let r = borrowed_r(input.as_bytes(), arrival);
+                let b = borrowed_b(&cbor, arrival);
+                match on_borrowed(&b, !owned.is_accept(), agree(&r, &b)) {
+                    OnBorrowed::Right => section.case(),
+                    OnBorrowed::NotBorrowed => section.not_borrowed(&name, b.describe()),
+                    OnBorrowed::Wrong => {
+                        section.case();
                         section.differ(&name, json!({ "input": input, "outcome": r.describe() }), b.describe());
                         section.fail(&name, "outcome differs from serde_json on the same value as JSON");
                     }

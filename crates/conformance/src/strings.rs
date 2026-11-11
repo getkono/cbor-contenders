@@ -11,7 +11,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::cases::hex;
-use crate::outcome::{ARRIVALS, Decode, Outcome, Str, Target, Typed, borrowed, owned};
+use crate::outcome::{
+    ARRIVALS, Decode, OnBorrowed, Outcome, Str, Target, Typed, borrowed, borrows, on_borrowed, owned,
+};
 use crate::record::Section;
 
 /// A `Cow<str>` field that borrows where it can.
@@ -54,36 +56,49 @@ const INVALID: &[(&str, &str, &str)] = &[
 ];
 
 /// Run the section.
+///
+/// The borrowing targets (`&str`, and a `Cow` field, which a library that
+/// does not borrow fills owned) are judged by [`on_borrowed`]: a library
+/// that cannot produce one from valid text of the same shape does not
+/// borrow it, and its refusals of that target are recorded as not borrowed,
+/// neither passed nor gated. The owned targets gate every case.
 #[must_use]
 pub fn run<B: Backend>() -> Section {
     let mut section = Section::new("strings");
+    let str_borrows = borrows::<B, Str>(&hex("61 61"));
+    let cow_borrows = borrows::<B, AsCow>(&hex("a1 61 74 61 61"));
+    section.data("borrows", json!({ "&str": str_borrows, "Cow": cow_borrows }));
     for (what, text, shape) in INVALID {
         let bytes = hex(text);
         let wrapped = [hex("a1 61 74"), bytes.clone()].concat();
-        let paths: Vec<(&str, Decode, Vec<u8>)> = if *shape == "struct" {
-            vec![("struct", owned::<B, Typed<One>>, bytes.clone())]
+        // Each path, and whether it is a borrowing target the library
+        // borrows (`None` for an owned target).
+        let paths: Vec<(&str, Decode, Vec<u8>, Option<bool>)> = if *shape == "struct" {
+            vec![("struct", owned::<B, Typed<One>>, bytes.clone(), None)]
         } else {
             vec![
-                ("String", owned::<B, Typed<String>>, bytes.clone()),
-                ("&str", borrowed::<B, Str>, bytes.clone()),
-                ("Cow", borrowed::<B, AsCow>, wrapped),
+                ("String", owned::<B, Typed<String>>, bytes.clone(), None),
+                ("&str", borrowed::<B, Str>, bytes.clone(), Some(str_borrows)),
+                ("Cow", borrowed::<B, AsCow>, wrapped, Some(cow_borrows)),
             ]
         };
-        for (target, decode, input) in paths {
+        for (target, decode, input, borrowing) in paths {
             for arrival in ARRIVALS {
                 let case = format!("{what} ({text})#{target}#{}", arrival.name());
-                section.case();
-                match decode(&input, arrival) {
-                    Outcome::Reject(failure) if failure.status() == 400 => {}
-                    // A target the library cannot produce at all (an `&str`
-                    // from a library that never borrows) is no answer about
-                    // the text.
-                    Outcome::Reject(failure) if failure.class == codecs::Class::Unsupported => {}
-                    other => {
-                        section.differ(&case, json!("refused, 400"), other.describe());
+                let outcome = decode(&input, arrival);
+                let right = matches!(&outcome, Outcome::Reject(failure) if failure.status() == 400);
+                let judged = borrowing.map_or(if right { OnBorrowed::Right } else { OnBorrowed::Wrong }, |borrows| {
+                    on_borrowed(&outcome, borrows, right)
+                });
+                match judged {
+                    OnBorrowed::NotBorrowed => section.not_borrowed(&case, outcome.describe()),
+                    OnBorrowed::Right => section.case(),
+                    OnBorrowed::Wrong => {
+                        section.case();
+                        section.differ(&case, json!("refused, 400"), outcome.describe());
                         section.fail(
                             &case,
-                            match other {
+                            match outcome {
                                 Outcome::Accept(_) => "invalid UTF-8 accepted",
                                 Outcome::Reject(_) => "invalid UTF-8 answered 422, not 400",
                                 Outcome::Panic(_) => "panicked",
@@ -95,18 +110,22 @@ pub fn run<B: Backend>() -> Section {
         }
     }
     // Valid text still decodes, borrowed where the library borrows.
-    for (target, decode) in [
-        ("&str", borrowed::<B, Str> as Decode),
-        ("String", owned::<B, Typed<String>>),
+    for (target, decode, borrowing) in [
+        ("&str", borrowed::<B, Str> as Decode, Some(str_borrows)),
+        ("String", owned::<B, Typed<String>>, None),
     ] {
         let case = format!("valid two-byte character#{target}");
-        section.case();
         let outcome = decode(&hex("62 c3 bc"), ARRIVALS[0]);
-        match outcome {
-            Outcome::Accept(ref value) if value == "\u{fc}" => {}
-            Outcome::Reject(ref failure) if failure.class == codecs::Class::Unsupported => {}
-            other => {
-                section.differ(&case, json!("\u{fc}"), other.describe());
+        let right = matches!(&outcome, Outcome::Accept(value) if value == "\u{fc}");
+        let judged = borrowing.map_or(if right { OnBorrowed::Right } else { OnBorrowed::Wrong }, |borrows| {
+            on_borrowed(&outcome, borrows, right)
+        });
+        match judged {
+            OnBorrowed::NotBorrowed => section.not_borrowed(&case, outcome.describe()),
+            OnBorrowed::Right => section.case(),
+            OnBorrowed::Wrong => {
+                section.case();
+                section.differ(&case, json!("\u{fc}"), outcome.describe());
                 section.fail(&case, "valid text not decoded");
             }
         }
