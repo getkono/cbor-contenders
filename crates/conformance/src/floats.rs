@@ -3,10 +3,16 @@
 //! round-tripped bit for bit through the library's own encoder and decoder.
 //!
 //! Gates: a finite value or an infinity decoded to other bits (the sign of
-//! `-0` included), a width refused into a target that holds it exactly, and
-//! any random value that does not round-trip. Recorded: whether a NaN keeps
-//! its payload and sign (RFC 8949 section 4.2.2 leaves NaN's bits to the
-//! application), and how a double that does not fit is narrowed into `f32`.
+//! `-0` included), a width refused into a target that holds it exactly, any
+//! random value that does not round-trip, and `-0`, `+inf` or `-inf` encoded
+//! as `f32` or `f64` and read back as another value by the library or the
+//! oracle. Recorded: whether a NaN keeps its payload and sign (RFC 8949
+//! section 4.2.2 leaves NaN's bits to the application), how a double that
+//! does not fit is narrowed into `f32`, and the bytes and head width (`f9`,
+//! `fa`, `fb`) each encoder writes for `-0`, the infinities and NaN.
+//!
+//! [`run`]'s gating checks, with a thousand random values, are tested on
+//! the oracle in this module.
 
 use codecs::Backend;
 use payloads::Rng;
@@ -99,6 +105,83 @@ fn round_trips<B: Backend, T: serde::Serialize + serde::de::DeserializeOwned + C
     .unwrap_or(false)
 }
 
+/// The width a float head names.
+fn width(head: Option<&u8>) -> &'static str {
+    match head {
+        Some(0xf9) => "half (f9)",
+        Some(0xfa) => "single (fa)",
+        Some(0xfb) => "double (fb)",
+        _ => "not a float",
+    }
+}
+
+/// One special value encoded by `B` and read back by `B` and the oracle as
+/// the same type: the report's record, and why it gates, if it does (only
+/// for a value that is not NaN: NaN's bits are the application's).
+fn special<B: Backend, T>(value: T) -> (Value, Option<String>)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Copy + FloatBits,
+{
+    let bytes = match guarded(|| B::encode(&value)) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(failure)) => {
+            return (
+                json!({ "refused": failure.to_string() }),
+                Some(format!("encode failed: {failure}")),
+            );
+        }
+        Err(panic) => return (json!({ "panic": panic }), Some(format!("encode panicked: {panic}"))),
+    };
+    let own = guarded(|| B::decode::<T>(bytes::Bytes::copy_from_slice(&bytes)))
+        .ok()
+        .and_then(Result::ok);
+    let oracle = serde_cbor::from_slice::<T>(&bytes).ok();
+    let exact = |back: Option<T>| back.is_some_and(|back| back.bits() == value.bits());
+    let nan = value.bits() == json!("nan");
+    let raw = |back: Option<T>| back.map_or_else(|| json!("refused"), |back| back.bits());
+    let failure = match (exact(own), exact(oracle)) {
+        _ if nan => None,
+        (false, _) => Some("the library reads its own encoding back as another value".to_owned()),
+        (_, false) => Some("the oracle reads the encoding as another value".to_owned()),
+        _ => None,
+    };
+    (
+        json!({
+            "hex": hex::encode(&bytes),
+            "width": width(bytes.first()),
+            "own": raw(own),
+            "oracle": raw(oracle),
+        }),
+        failure,
+    )
+}
+
+/// `-0`, `±inf` and NaN encoded as `f32` and as `f64`: the bytes and head
+/// width recorded, and a `-0` or infinity read back as another value gated.
+fn special_encodes<B: Backend>(section: &mut Section) {
+    let mut encoded = serde_json::Map::new();
+    let cases: [(&str, (Value, Option<String>)); 8] = [
+        ("-0.0 as f64", special::<B, f64>(-0.0)),
+        ("+inf as f64", special::<B, f64>(f64::INFINITY)),
+        ("-inf as f64", special::<B, f64>(f64::NEG_INFINITY)),
+        ("NaN as f64", special::<B, f64>(f64::NAN)),
+        ("-0.0 as f32", special::<B, f32>(-0.0)),
+        ("+inf as f32", special::<B, f32>(f32::INFINITY)),
+        ("-inf as f32", special::<B, f32>(f32::NEG_INFINITY)),
+        ("NaN as f32", special::<B, f32>(f32::NAN)),
+    ];
+    for (what, (record, failure)) in cases {
+        let case = format!("encode {what}");
+        section.case();
+        if let Some(failure) = failure {
+            section.differ(&case, json!("the same value"), record.clone());
+            section.fail(&case, failure);
+        }
+        encoded.insert(what.to_owned(), record);
+    }
+    section.data("encoded_specials", Value::Object(encoded));
+}
+
 /// Run the section.
 #[must_use]
 pub fn run<B: Backend>(samples: usize) -> Section {
@@ -132,6 +215,9 @@ pub fn run<B: Backend>(samples: usize) -> Section {
     }
     section.data("recorded", Value::Object(observed));
     if B::ENCODES {
+        special_encodes::<B>(&mut section);
+    }
+    if B::ENCODES {
         let mut rng = Rng::new(0xf107);
         let mut failed = [0usize; 2];
         for i in 0..samples {
@@ -162,4 +248,21 @@ pub fn run<B: Backend>(samples: usize) -> Section {
         );
     }
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use codecs::backend::serde_cbor::SerdeCbor;
+
+    use super::*;
+
+    #[test]
+    fn the_oracle_passes_floats_and_writes_specials_short() {
+        let section = run::<SerdeCbor>(1_000);
+        assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+        let (record, _) = section.finish();
+        let specials = &record["data"]["encoded_specials"];
+        assert_eq!(specials["-0.0 as f64"]["hex"], "f98000", "{specials}");
+        assert_eq!(specials["+inf as f32"]["width"], "half (f9)", "{specials}");
+    }
 }
