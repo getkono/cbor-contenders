@@ -10,30 +10,29 @@ use std::borrow::Cow;
 
 use serde::{Deserialize, Serialize};
 
-codecs::native_type!(Item, Catalog, Echo);
-
 /// One record: the element of [`Catalog`].
-#[derive(Serialize, Deserialize, prost::Message)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "prost", derive(prost::Message))]
 #[cfg_attr(feature = "minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Item {
     /// Stable identifier.
-    #[prost(uint64, tag = "1")]
+    #[cfg_attr(feature = "prost", prost(uint64, tag = "1"))]
     #[cfg_attr(feature = "minicbor", n(0))]
     pub id: u64,
     /// Display name.
-    #[prost(string, tag = "2")]
+    #[cfg_attr(feature = "prost", prost(string, tag = "2"))]
     #[cfg_attr(feature = "minicbor", n(1))]
     pub name: String,
     /// Labels.
-    #[prost(string, repeated, tag = "3")]
+    #[cfg_attr(feature = "prost", prost(string, repeated, tag = "3"))]
     #[cfg_attr(feature = "minicbor", n(2))]
     pub tags: Vec<String>,
     /// Liveness.
-    #[prost(bool, tag = "4")]
+    #[cfg_attr(feature = "prost", prost(bool, tag = "4"))]
     #[cfg_attr(feature = "minicbor", n(3))]
     pub active: bool,
     /// A two-decimal weight.
-    #[prost(double, tag = "5")]
+    #[cfg_attr(feature = "prost", prost(double, tag = "5"))]
     #[cfg_attr(feature = "minicbor", n(4))]
     pub score: f64,
 }
@@ -56,19 +55,20 @@ pub struct ItemRef<'a> {
 }
 
 /// The `json-large` body.
-#[derive(Serialize, Deserialize, prost::Message)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "prost", derive(prost::Message))]
 #[cfg_attr(feature = "minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Catalog {
     /// Fixture revision.
-    #[prost(uint32, tag = "1")]
+    #[cfg_attr(feature = "prost", prost(uint32, tag = "1"))]
     #[cfg_attr(feature = "minicbor", n(0))]
     pub revision: u32,
     /// Total records available.
-    #[prost(uint64, tag = "2")]
+    #[cfg_attr(feature = "prost", prost(uint64, tag = "2"))]
     #[cfg_attr(feature = "minicbor", n(1))]
     pub total: u64,
     /// The records.
-    #[prost(message, repeated, tag = "3")]
+    #[cfg_attr(feature = "prost", prost(message, repeated, tag = "3"))]
     #[cfg_attr(feature = "minicbor", n(2))]
     pub items: Vec<Item>,
 }
@@ -86,19 +86,20 @@ pub struct CatalogRef<'a> {
 }
 
 /// The `echo-post` body, in both directions.
-#[derive(Serialize, Deserialize, prost::Message)]
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(feature = "prost", derive(prost::Message))]
 #[cfg_attr(feature = "minicbor", derive(minicbor::Encode, minicbor::Decode))]
 pub struct Echo {
     /// Correlation id.
-    #[prost(uint64, tag = "1")]
+    #[cfg_attr(feature = "prost", prost(uint64, tag = "1"))]
     #[cfg_attr(feature = "minicbor", n(0))]
     pub id: u64,
     /// The bulk of the body.
-    #[prost(string, tag = "2")]
+    #[cfg_attr(feature = "prost", prost(string, tag = "2"))]
     #[cfg_attr(feature = "minicbor", n(1))]
     pub payload: String,
     /// Checksum of the payload bytes.
-    #[prost(uint64, tag = "3")]
+    #[cfg_attr(feature = "prost", prost(uint64, tag = "3"))]
     #[cfg_attr(feature = "minicbor", n(2))]
     pub checksum: u64,
 }

@@ -106,17 +106,31 @@ pub fn target_dir(place: Place, variant: &Variant, set: &Set) -> PathBuf {
         .join(set.name)
 }
 
+/// The features arguments that build `package` with `features` and nothing
+/// else: the size fixture's defaults (serde_json and prost, for the
+/// workspace's own lint and test builds) are off in every measured build, so
+/// a candidate's fixture compiles and links the candidate alone.
+#[must_use]
+pub fn feature_args(package: &str, features: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if package == "size-fixture" {
+        args.push("--no-default-features".to_owned());
+    }
+    if !features.is_empty() {
+        args.extend(["--features".to_owned(), features.to_owned()]);
+    }
+    args
+}
+
 /// The `cargo build --release` of `package` that a measured binary comes from.
 fn measured_build(package: &str, features: &str, rustflags: &str, dir: &Path) -> Result<Command> {
     let mut cmd = cargo();
     cmd.current_dir(root())
         .args(["build", "--release", "--locked", "-p", package])
         .args(pinned_profile(false)?)
+        .args(feature_args(package, features))
         .env("RUSTFLAGS", rustflags)
         .env("CARGO_TARGET_DIR", dir);
-    if !features.is_empty() {
-        cmd.args(["--features", features]);
-    }
     Ok(cmd)
 }
 
@@ -167,9 +181,7 @@ pub fn resolved_features(package: &str, features: &str, krate: &str) -> Result<V
         "--prefix",
         "none",
     ]);
-    if !features.is_empty() {
-        cmd.args(["--features", features]);
-    }
+    cmd.args(feature_args(package, features));
     let out = crate::util::output(&mut cmd)?;
     let prefix = format!("{krate} feature \"");
     let mut features: Vec<String> = out
@@ -224,6 +236,9 @@ mod tests {
         assert!(args.windows(pin.len()).any(|w| w == pin), "{args:?}");
         assert!(args.contains(&"build.incremental=false"), "{args:?}");
         assert!(args.windows(2).any(|w| w == ["--features", "ciborium"]), "{args:?}");
+        // The fixture's defaults (serde_json, prost) stay out of a measured
+        // build.
+        assert!(args.contains(&"--no-default-features"), "{args:?}");
         let flags = cmd.get_envs().find(|(k, _)| *k == "RUSTFLAGS").and_then(|(_, v)| v);
         assert_eq!(flags, Some(std::ffi::OsStr::new("-C target-cpu=x86-64")));
     }

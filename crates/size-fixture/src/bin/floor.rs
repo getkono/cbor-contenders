@@ -1,4 +1,4 @@
-//! The same I/O with no JSON: the baseline every fixture is weighed against.
+//! The same I/O with no codec: the baseline every fixture is weighed against.
 fn main() {
     let input = size_fixture::stdin();
     let out = if size_fixture::is_echo(&input) {

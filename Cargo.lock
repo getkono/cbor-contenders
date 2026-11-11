@@ -1538,8 +1538,13 @@ name = "size-fixture"
 version = "0.0.0"
 dependencies = [
  "bytes",
+ "c2pa_cbor",
+ "cbor2",
+ "cbor4ii",
+ "ciborium",
  "codecs",
  "minicbor",
+ "minicbor-serde",
  "payloads",
  "prost",
  "prost-derive",

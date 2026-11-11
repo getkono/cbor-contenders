@@ -66,9 +66,7 @@ fn timed_command(dir: &std::path::Path, features: &str, release: bool) -> Result
     if release {
         cmd.arg("--release");
     }
-    if !features.is_empty() {
-        cmd.args(["--features", features]);
-    }
+    cmd.args(crate::build::feature_args("size-fixture", features));
     Ok(cmd)
 }
 

@@ -18,7 +18,8 @@ pub struct Set {
     /// baseline set).
     pub backends: &'static [&'static str],
     /// The crates whose cost this set weighs (`size`, `compile-time`,
-    /// `msrv`), each with the `size-fixture` feature that selects it.
+    /// `msrv`), each with the `size-fixture` feature that selects it (the
+    /// fixture is built without its defaults, so each names its codec).
     pub costs: &'static [(&'static str, &'static str)],
 }
 
@@ -28,7 +29,7 @@ pub const SETS: &[Set] = &[
         name: "baseline",
         features: "",
         backends: &["serde_json", "prost"],
-        costs: &[("serde_json", ""), ("prost", "prost")],
+        costs: &[("serde_json", "serde_json"), ("prost", "prost")],
     },
     Set {
         name: "ciborium",
