@@ -201,14 +201,25 @@ pub fn resolved_features(package: &str, features: &str, krate: &str) -> Result<V
 /// candidate that silently switched on serde_json's `float_roundtrip` would
 /// slow the baseline it is compared against.
 pub fn check_features(package: &str, features: &str, set: &str, extra: &str) -> Result<()> {
-    for (krate, ()) in crate::matrix::SHARED_FEATURES {
-        let got = resolved_features(package, features, krate)?;
-        let want = resolved_features(package, extra, krate)?;
+    for krate in crate::matrix::SHARED_FEATURES {
+        let got = effective(krate, &resolved_features(package, features, krate)?);
+        let want = effective(krate, &resolved_features(package, extra, krate)?);
         if got != want {
             bail!("{package} in set {set}: {krate} features {got:?}, the baseline build's {want:?}");
         }
     }
     Ok(())
+}
+
+/// `features` of `krate` without those that change nothing beside another
+/// one present ([`crate::matrix::NO_OP_BESIDE`]).
+fn effective(krate: &str, features: &[String]) -> Vec<String> {
+    let keep = |f: &String| {
+        !crate::matrix::NO_OP_BESIDE
+            .iter()
+            .any(|(k, noop, beside)| *k == krate && f == noop && features.iter().any(|g| g == beside))
+    };
+    features.iter().filter(|f| keep(f)).cloned().collect()
 }
 
 /// Path to a built binary.
@@ -241,6 +252,15 @@ mod tests {
         assert!(args.contains(&"--no-default-features"), "{args:?}");
         let flags = cmd.get_envs().find(|(k, _)| *k == "RUSTFLAGS").and_then(|(_, v)| v);
         assert_eq!(flags, Some(std::ffi::OsStr::new("-C target-cpu=x86-64")));
+    }
+
+    /// serde's `alloc` is no difference beside `std`, but is one alone.
+    #[test]
+    fn a_no_op_feature_is_no_difference() {
+        let v = |f: &[&str]| f.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(super::effective("serde", &v(&["alloc", "std"])), v(&["std"]));
+        assert_eq!(super::effective("serde", &v(&["alloc"])), v(&["alloc"]));
+        assert_eq!(super::effective("prost", &v(&["alloc", "std"])), v(&["alloc", "std"]));
     }
 
     #[test]

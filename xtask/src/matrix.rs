@@ -73,7 +73,13 @@ pub const SETS: &[Set] = &[
 /// the baseline build's (`build::check_features`): a candidate that turned on
 /// a baseline's or serde's optional behaviour (serde_json's
 /// `float_roundtrip`, say) would change what the baseline is.
-pub const SHARED_FEATURES: &[(&str, ())] = &[("serde_json", ()), ("prost", ()), ("bytes", ())];
+pub const SHARED_FEATURES: &[&str] = &["serde", "serde_core", "serde_json", "prost", "bytes"];
+
+/// Features that change nothing beside another of the same crate, and so
+/// are no difference when a candidate turns them on: serde's `alloc` with
+/// `std` on (`serde_core` gates its `alloc` code on `std` or `alloc`; ciborium,
+/// minicbor-serde, cbor4ii and cbor2 each turn `alloc` on).
+pub const NO_OP_BESIDE: &[(&str, &str, &str)] = &[("serde", "alloc", "std"), ("serde_core", "alloc", "std")];
 
 /// Backends with their own derive: measured only where `payloads` carries
 /// the workload ([`payloads::carries_native`]), owned only, and with no
