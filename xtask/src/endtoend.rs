@@ -19,6 +19,17 @@ pub const ROUTES: &[(&str, &str, &str, Option<&str>)] = &[
     ("json-small-get", "GET", "/json/small", None),
 ];
 
+/// The sets of `filter` with an entry to serve end to end. A set with none
+/// (the minicbor derive's: a reference point, never served) has no `e2e`
+/// feature of its own, so it is not built.
+fn served(filter: &Filter) -> Vec<&'static crate::matrix::Set> {
+    filter
+        .sets()
+        .into_iter()
+        .filter(|s| !crate::matrix::e2e_entries(s).is_empty())
+        .collect()
+}
+
 /// Entries a set serves end to end; the baseline also serves every floor.
 pub fn backends(set: &crate::matrix::Set) -> Vec<&'static str> {
     let mut b = crate::matrix::e2e_entries(set);
@@ -54,7 +65,7 @@ pub fn count(args: &[String]) -> Result<()> {
     let requests = 200;
     let mut rows = Vec::new();
     for variant in filter.variants().into_iter().filter(|v| v.valgrind) {
-        for set in filter.sets() {
+        for set in served(&filter) {
             let release = build(Place::Container, "e2e", set, &variant)?;
             let exe = bin(&release, "e2e-count");
             let scratch = root().join("target/callgrind-e2e").join(variant.name).join(set.name);
@@ -363,7 +374,7 @@ pub fn time(args: &[String]) -> Result<()> {
     let mut built = Vec::new();
     for variant in filter.variants() {
         let mut servers = Vec::new();
-        for set in filter.sets() {
+        for set in served(&filter) {
             let exe = bin(&build(Place::Host, "e2e", set, &variant)?, "e2e-server");
             for backend in backends(set) {
                 servers.push((set.name, crate::matrix::label(set, backend), exe.clone()));
@@ -436,7 +447,17 @@ pub fn time(args: &[String]) -> Result<()> {
 mod tests {
     use serde_json::json;
 
-    use super::summarize;
+    use super::{served, summarize};
+    use crate::counted::Filter;
+
+    /// The minicbor derive's set serves nothing, and `e2e` has no feature
+    /// for it: building it would stop `mise run all`.
+    #[test]
+    fn a_set_with_no_entry_is_not_built() {
+        let sets: Vec<&str> = served(&Filter::default()).iter().map(|s| s.name).collect();
+        assert!(!sets.contains(&"minicbor"), "{sets:?}");
+        assert!(sets.contains(&"baseline") && sets.contains(&"ciborium"), "{sets:?}");
+    }
 
     #[test]
     fn a_wrong_answer_in_any_run_leaves_no_figure() {
