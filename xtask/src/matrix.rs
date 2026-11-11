@@ -256,6 +256,65 @@ pub fn e2e_entries_all() -> Vec<&'static str> {
     SETS.iter().flat_map(e2e_entries).collect()
 }
 
+/// One measured build: a package, built for a set, with one feature of the
+/// package switched on beside the set's (empty for none), and the binaries
+/// it is measured through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Build {
+    pub package: &'static str,
+    pub set: &'static Set,
+    pub feature: &'static str,
+    pub bins: &'static [&'static str],
+}
+
+/// Every build a measurement runs, at each variant: `cell` for every set
+/// (and with the counting allocator, for `alloc`), the conformance suite for
+/// every set it runs, the end-to-end server for every set served, and the
+/// size fixture for every crate a set weighs. `xtask doctor` checks each.
+#[must_use]
+pub fn measured_builds() -> Vec<Build> {
+    let mut builds = Vec::new();
+    for set in SETS {
+        builds.push(Build {
+            package: "cell",
+            set,
+            feature: "",
+            bins: &["cell"],
+        });
+        builds.push(Build {
+            package: "cell",
+            set,
+            feature: "count-alloc",
+            bins: &["cell"],
+        });
+        if set.backends.iter().any(|b| conformance_subject(b)) {
+            builds.push(Build {
+                package: "conformance",
+                set,
+                feature: "",
+                bins: &["conform"],
+            });
+        }
+        if !e2e_entries(set).is_empty() {
+            builds.push(Build {
+                package: "e2e",
+                set,
+                feature: "",
+                bins: &["e2e-server", "e2e-count"],
+            });
+        }
+        for (_, feature) in set.costs {
+            builds.push(Build {
+                package: "size-fixture",
+                set,
+                feature: if *feature == set.features { "" } else { feature },
+                bins: &["fixture-full", "fixture-decode", "floor"],
+            });
+        }
+    }
+    builds
+}
+
 /// The floors served end to end, one per format an entry speaks.
 pub const FLOORS: &[&str] = &["floor-json", "floor-cbor", "floor-protobuf"];
 
