@@ -1,0 +1,526 @@
+# RFC 8949 Appendix A, Table 6 ("Examples of Encoded CBOR Data Items"),
+# transcribed from `rfc8949.txt` beside this file: every row's diagnostic
+# notation and encoding exactly as the RFC prints them (`conformance` tests
+# that they are), plus, per row, what this harness decodes it into and what
+# it must decode to. `target` and `expect` are this repository's reading of
+# the diagnostic notation, not the RFC's text:
+#
+# - `target`: the Rust type decoded into (`u64`, `i64`, `i128`, `u128`,
+#   `f64`, `bool`, `option` (an `Option<u8>`), `string`, `bytes`
+#   (`serde_bytes::ByteBuf`), `value` (`serde_json::Value`), `int-map`
+#   (`BTreeMap<u64, u64>`), or `ignored` (`IgnoredAny`)).
+# - `expect`: the value, as JSON text: an `f64` as its bit pattern
+#   (`"0x..."`, or `"nan"` for any NaN), bytes as hex, a 128-bit integer as
+#   its decimal digits, `option`'s `None` as absent.
+# - `gate = false` with `why`: a row whose answer RFC 8949 leaves to the
+#   implementation; its outcome is recorded, not gated.
+#
+# The table is a Code Component under the IETF Trust Legal Provisions
+# (section 4; tables of values and CBOR are listed Code Components), so it is
+# used under the Revised BSD License; see LICENSE.
+
+[[row]]
+diagnostic = "0"
+hex = "00"
+target = "u64"
+expect = "0"
+
+[[row]]
+diagnostic = "1"
+hex = "01"
+target = "u64"
+expect = "1"
+
+[[row]]
+diagnostic = "10"
+hex = "0a"
+target = "u64"
+expect = "10"
+
+[[row]]
+diagnostic = "23"
+hex = "17"
+target = "u64"
+expect = "23"
+
+[[row]]
+diagnostic = "24"
+hex = "1818"
+target = "u64"
+expect = "24"
+
+[[row]]
+diagnostic = "25"
+hex = "1819"
+target = "u64"
+expect = "25"
+
+[[row]]
+diagnostic = "100"
+hex = "1864"
+target = "u64"
+expect = "100"
+
+[[row]]
+diagnostic = "1000"
+hex = "1903e8"
+target = "u64"
+expect = "1000"
+
+[[row]]
+diagnostic = "1000000"
+hex = "1a000f4240"
+target = "u64"
+expect = "1000000"
+
+[[row]]
+diagnostic = "1000000000000"
+hex = "1b000000e8d4a51000"
+target = "u64"
+expect = "1000000000000"
+
+[[row]]
+diagnostic = "18446744073709551615"
+hex = "1bffffffffffffffff"
+target = "u64"
+expect = "18446744073709551615"
+
+[[row]]
+diagnostic = "18446744073709551616"
+hex = "c249010000000000000000"
+target = "u128"
+expect = "\"18446744073709551616\""
+gate = false
+why = "a bignum (tag 2): an implementation may refuse it"
+
+[[row]]
+diagnostic = "-18446744073709551616"
+hex = "3bffffffffffffffff"
+target = "i128"
+expect = "\"-18446744073709551616\""
+gate = false
+why = "below i64::MIN: a decoder may read it into an i128 or refuse it"
+
+[[row]]
+diagnostic = "-18446744073709551617"
+hex = "c349010000000000000000"
+target = "i128"
+expect = "\"-18446744073709551617\""
+gate = false
+why = "a bignum (tag 3): an implementation may refuse it"
+
+[[row]]
+diagnostic = "-1"
+hex = "20"
+target = "i64"
+expect = "-1"
+
+[[row]]
+diagnostic = "-10"
+hex = "29"
+target = "i64"
+expect = "-10"
+
+[[row]]
+diagnostic = "-100"
+hex = "3863"
+target = "i64"
+expect = "-100"
+
+[[row]]
+diagnostic = "-1000"
+hex = "3903e7"
+target = "i64"
+expect = "-1000"
+
+[[row]]
+diagnostic = "0.0"
+hex = "f90000"
+target = "f64"
+expect = "\"0x0000000000000000\""
+
+[[row]]
+diagnostic = "-0.0"
+hex = "f98000"
+target = "f64"
+expect = "\"0x8000000000000000\""
+
+[[row]]
+diagnostic = "1.0"
+hex = "f93c00"
+target = "f64"
+expect = "\"0x3ff0000000000000\""
+
+[[row]]
+diagnostic = "1.1"
+hex = "fb3ff199999999999a"
+target = "f64"
+expect = "\"0x3ff199999999999a\""
+
+[[row]]
+diagnostic = "1.5"
+hex = "f93e00"
+target = "f64"
+expect = "\"0x3ff8000000000000\""
+
+[[row]]
+diagnostic = "65504.0"
+hex = "f97bff"
+target = "f64"
+expect = "\"0x40effc0000000000\""
+
+[[row]]
+diagnostic = "100000.0"
+hex = "fa47c35000"
+target = "f64"
+expect = "\"0x40f86a0000000000\""
+
+[[row]]
+diagnostic = "3.4028234663852886e+38"
+hex = "fa7f7fffff"
+target = "f64"
+expect = "\"0x47efffffe0000000\""
+
+[[row]]
+diagnostic = "1.0e+300"
+hex = "fb7e37e43c8800759c"
+target = "f64"
+expect = "\"0x7e37e43c8800759c\""
+
+[[row]]
+diagnostic = "5.960464477539063e-8"
+hex = "f90001"
+target = "f64"
+expect = "\"0x3e70000000000000\""
+
+[[row]]
+diagnostic = "0.00006103515625"
+hex = "f90400"
+target = "f64"
+expect = "\"0x3f10000000000000\""
+
+[[row]]
+diagnostic = "-4.0"
+hex = "f9c400"
+target = "f64"
+expect = "\"0xc010000000000000\""
+
+[[row]]
+diagnostic = "-4.1"
+hex = "fbc010666666666666"
+target = "f64"
+expect = "\"0xc010666666666666\""
+
+[[row]]
+diagnostic = "Infinity"
+hex = "f97c00"
+target = "f64"
+expect = "\"0x7ff0000000000000\""
+
+[[row]]
+diagnostic = "NaN"
+hex = "f97e00"
+target = "f64"
+expect = "\"nan\""
+
+[[row]]
+diagnostic = "-Infinity"
+hex = "f9fc00"
+target = "f64"
+expect = "\"0xfff0000000000000\""
+
+[[row]]
+diagnostic = "Infinity"
+hex = "fa7f800000"
+target = "f64"
+expect = "\"0x7ff0000000000000\""
+
+[[row]]
+diagnostic = "NaN"
+hex = "fa7fc00000"
+target = "f64"
+expect = "\"nan\""
+
+[[row]]
+diagnostic = "-Infinity"
+hex = "faff800000"
+target = "f64"
+expect = "\"0xfff0000000000000\""
+
+[[row]]
+diagnostic = "Infinity"
+hex = "fb7ff0000000000000"
+target = "f64"
+expect = "\"0x7ff0000000000000\""
+
+[[row]]
+diagnostic = "NaN"
+hex = "fb7ff8000000000000"
+target = "f64"
+expect = "\"nan\""
+
+[[row]]
+diagnostic = "-Infinity"
+hex = "fbfff0000000000000"
+target = "f64"
+expect = "\"0xfff0000000000000\""
+
+[[row]]
+diagnostic = "false"
+hex = "f4"
+target = "bool"
+expect = "false"
+
+[[row]]
+diagnostic = "true"
+hex = "f5"
+target = "bool"
+expect = "true"
+
+[[row]]
+diagnostic = "null"
+hex = "f6"
+target = "option"
+
+[[row]]
+diagnostic = "undefined"
+hex = "f7"
+target = "option"
+gate = false
+why = "undefined has no value in serde's data model; a decoder may read it as None or refuse it"
+
+[[row]]
+diagnostic = "simple(16)"
+hex = "f0"
+target = "ignored"
+gate = false
+why = "an unassigned simple value has no serde equivalent; recorded"
+
+[[row]]
+diagnostic = "simple(255)"
+hex = "f8ff"
+target = "ignored"
+gate = false
+why = "an unassigned simple value has no serde equivalent; recorded"
+
+[[row]]
+diagnostic = "0(\"2013-03-21T20:04:00Z\")"
+hex = "c074323031332d30332d32315432303a30343a30305a"
+target = "string"
+expect = "\"2013-03-21T20:04:00Z\""
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "1(1363896240)"
+hex = "c11a514b67b0"
+target = "u64"
+expect = "1363896240"
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "1(1363896240.5)"
+hex = "c1fb41d452d9ec200000"
+target = "f64"
+expect = "\"0x41d452d9ec200000\""
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "23(h'01020304')"
+hex = "d74401020304"
+target = "bytes"
+expect = "\"01020304\""
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "24(h'6449455446')"
+hex = "d818456449455446"
+target = "bytes"
+expect = "\"6449455446\""
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "32(\"http://www.example.com\")"
+hex = "d82076687474703a2f2f7777772e6578616d706c652e636f6d"
+target = "string"
+expect = "\"http://www.example.com\""
+gate = false
+why = "a tagged item: a decoder may read the content, ignoring the tag, or refuse the tag"
+
+[[row]]
+diagnostic = "h''"
+hex = "40"
+target = "bytes"
+expect = "\"\""
+
+[[row]]
+diagnostic = "h'01020304'"
+hex = "4401020304"
+target = "bytes"
+expect = "\"01020304\""
+
+[[row]]
+diagnostic = "\"\""
+hex = "60"
+target = "string"
+expect = "\"\""
+
+[[row]]
+diagnostic = "\"a\""
+hex = "6161"
+target = "string"
+expect = "\"a\""
+
+[[row]]
+diagnostic = "\"IETF\""
+hex = "6449455446"
+target = "string"
+expect = "\"IETF\""
+
+[[row]]
+diagnostic = "\"\\\"\\\\\""
+hex = "62225c"
+target = "string"
+expect = "\"\\\"\\\\\""
+
+[[row]]
+diagnostic = "\"\\u00fc\""
+hex = "62c3bc"
+target = "string"
+expect = "\"ü\""
+
+[[row]]
+diagnostic = "\"\\u6c34\""
+hex = "63e6b0b4"
+target = "string"
+expect = "\"水\""
+
+[[row]]
+diagnostic = "\"\\ud800\\udd51\""
+hex = "64f0908591"
+target = "string"
+expect = "\"𐅑\""
+
+[[row]]
+diagnostic = "[]"
+hex = "80"
+target = "value"
+expect = "[]"
+
+[[row]]
+diagnostic = "[1, 2, 3]"
+hex = "83010203"
+target = "value"
+expect = "[1, 2, 3]"
+
+[[row]]
+diagnostic = "[1, [2, 3], [4, 5]]"
+hex = "8301820203820405"
+target = "value"
+expect = "[1, [2, 3], [4, 5]]"
+
+[[row]]
+diagnostic = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+hex = "98190102030405060708090a0b0c0d0e0f101112131415161718181819"
+target = "value"
+expect = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+
+[[row]]
+diagnostic = "{}"
+hex = "a0"
+target = "value"
+expect = "{}"
+
+[[row]]
+diagnostic = "{1: 2, 3: 4}"
+hex = "a201020304"
+target = "int-map"
+expect = "{\"1\": 2, \"3\": 4}"
+
+[[row]]
+diagnostic = "{\"a\": 1, \"b\": [2, 3]}"
+hex = "a26161016162820203"
+target = "value"
+expect = "{\"a\": 1, \"b\": [2, 3]}"
+
+[[row]]
+diagnostic = "[\"a\", {\"b\": \"c\"}]"
+hex = "826161a161626163"
+target = "value"
+expect = "[\"a\", {\"b\": \"c\"}]"
+
+[[row]]
+diagnostic = "{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}"
+hex = "a56161614161626142616361436164614461656145"
+target = "value"
+expect = "{\"a\": \"A\", \"b\": \"B\", \"c\": \"C\", \"d\": \"D\", \"e\": \"E\"}"
+
+[[row]]
+diagnostic = "(_ h'0102', h'030405')"
+hex = "5f42010243030405ff"
+target = "bytes"
+expect = "\"0102030405\""
+
+[[row]]
+diagnostic = "(_ \"strea\", \"ming\")"
+hex = "7f657374726561646d696e67ff"
+target = "string"
+expect = "\"streaming\""
+
+[[row]]
+diagnostic = "[_ ]"
+hex = "9fff"
+target = "value"
+expect = "[]"
+
+[[row]]
+diagnostic = "[_ 1, [2, 3], [_ 4, 5]]"
+hex = "9f018202039f0405ffff"
+target = "value"
+expect = "[1, [2, 3], [4, 5]]"
+
+[[row]]
+diagnostic = "[_ 1, [2, 3], [4, 5]]"
+hex = "9f01820203820405ff"
+target = "value"
+expect = "[1, [2, 3], [4, 5]]"
+
+[[row]]
+diagnostic = "[1, [2, 3], [_ 4, 5]]"
+hex = "83018202039f0405ff"
+target = "value"
+expect = "[1, [2, 3], [4, 5]]"
+
+[[row]]
+diagnostic = "[1, [_ 2, 3], [4, 5]]"
+hex = "83019f0203ff820405"
+target = "value"
+expect = "[1, [2, 3], [4, 5]]"
+
+[[row]]
+diagnostic = "[_ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+hex = "9f0102030405060708090a0b0c0d0e0f101112131415161718181819ff"
+target = "value"
+expect = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]"
+
+[[row]]
+diagnostic = "{_ \"a\": 1, \"b\": [_ 2, 3]}"
+hex = "bf61610161629f0203ffff"
+target = "value"
+expect = "{\"a\": 1, \"b\": [2, 3]}"
+
+[[row]]
+diagnostic = "[\"a\", {_ \"b\": \"c\"}]"
+hex = "826161bf61626163ff"
+target = "value"
+expect = "[\"a\", {\"b\": \"c\"}]"
+
+[[row]]
+diagnostic = "{_ \"Fun\": true, \"Amt\": -2}"
+hex = "bf6346756ef563416d7421ff"
+target = "value"
+expect = "{\"Fun\": true, \"Amt\": -2}"
