@@ -94,6 +94,7 @@ pub fn render(data: &Data, verdicts: &[Verdict], exports: &[Export], notes: &[St
     }
     verdict_section(&mut out, verdicts);
     kynos_section(data, &mut out);
+    timed_section(data, &mut out);
     per_workload_section(data, &mut out);
     heap_section(data, &mut out);
     wire_section(data, &mut out);
@@ -201,6 +202,46 @@ fn kynos_section(data: &Data, out: &mut String) {
             .collect();
         let _ = writeln!(out, "A/A bands: {}.\n", bands.join("; "));
     }
+}
+
+fn timed_section(data: &Data, out: &mut String) {
+    section(
+        out,
+        "timed",
+        "Axis 1 and 2 beside the cycles: wall-clock time and instructions",
+        "At the Kynos workloads, `portable`, the server's own shapes: wall-clock nanoseconds per \
+         operation (median over rounds of each round's median) and its spread over rounds, which \
+         corroborate the cycles and decide nothing; and hardware `instructions:u` per operation \
+         (median over rounds). Every timed workload is in `data/time.csv` and `data/hw.csv`.",
+    );
+    let ns = |v: Option<f64>| v.map_or_else(|| "–".into(), |n| format!("{n:.0} ns"));
+    let mut rows = Vec::new();
+    for workload in KYNOS {
+        for entry in entries() {
+            let mut row = vec![(*workload).to_owned(), code(entry)];
+            for op in ["decode", crate::matrix::SERVER_ENCODE] {
+                let key = Key::new(DECIDING_VARIANT, entry, workload, op);
+                row.push(ns(data.host.time.get(&key, "ns")));
+                row.push(ns(data.host.time.get(&key, "ns_round_spread")));
+                row.push(opt(data.host.hw.get(&key, "instructions")));
+            }
+            rows.push(row);
+        }
+    }
+    table(
+        out,
+        &[
+            "Workload",
+            "Entry",
+            "Decode time",
+            "Decode spread",
+            "Decode instructions",
+            "Encode time",
+            "Encode spread",
+            "Encode instructions",
+        ],
+        &rows,
+    );
 }
 
 fn per_workload_section(data: &Data, out: &mut String) {
