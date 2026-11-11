@@ -261,7 +261,12 @@ fn conformance(data: &Data, entry: &str, set: &str) -> Clause {
         if runs.is_empty() {
             pending.push("fuzzing".into());
         }
-        let diverged = runs.iter().filter(|r| r["divergence_found"] == true).count();
+        // A sanitizer report is a divergence whatever the run recorded: a
+        // run from before it was counted as one says so only there.
+        let diverged = runs
+            .iter()
+            .filter(|r| r["divergence_found"] == true || r["sanitizer_report"].is_string())
+            .count();
         if diverged > 0 {
             failures.push(format!("fuzzing diverged in {diverged} targets"));
         }
@@ -288,7 +293,10 @@ fn conformance(data: &Data, entry: &str, set: &str) -> Clause {
 
 /// Clause 4 for `krate`.
 fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
+    // Evidence that is missing makes the clause pending, but only once
+    // everything present has been read: a failure found elsewhere stands.
     let mut failures = Vec::new();
+    let mut pending = Vec::new();
     match data
         .soundness
         .get(krate)
@@ -297,37 +305,58 @@ fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
     {
         Some(open) if !open.is_empty() => failures.push(format!("{} open soundness issues", open.len())),
         Some(_) => {}
-        None => return Clause::Pending("no soundness.toml entry".into()),
+        None => pending.push("no reviewed `open` list in soundness.toml"),
     }
-    let Some(row) = data.footprint.iter().find(|r| r["set"] == set && r["crate"] == krate) else {
-        return Clause::Pending("no footprint".into());
-    };
-    let advisories: Vec<String> = row["crates"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|c| c["advisories"].as_array().into_iter().flatten().map(move |a| (c, a)))
-        .filter(|(_, a)| a["affects_pinned_version"] == true && a["informational"].is_null())
-        .map(|(c, a)| {
+    // A memory error AddressSanitizer caught while fuzzing is unsoundness in
+    // the code the candidate adds (the fuzz targets and the oracle are safe
+    // Rust), whatever else is recorded.
+    let sanitized: Vec<String> = data
+        .fuzz
+        .iter()
+        .filter(|r| r["set"] == set && r["sanitizer_report"].is_string())
+        .map(|r| {
             format!(
-                "{} {}",
-                c["name"].as_str().unwrap_or("?"),
-                a["id"].as_str().unwrap_or("?")
+                "AddressSanitizer report fuzzing {}",
+                r["target"].as_str().unwrap_or("?")
             )
         })
         .collect();
-    if !advisories.is_empty() {
-        failures.push(format!("advisories: {}", advisories.join(", ")));
+    if !sanitized.is_empty() {
+        failures.push(sanitized.join(", "));
+    }
+    match data.footprint.iter().find(|r| r["set"] == set && r["crate"] == krate) {
+        None => pending.push("no footprint"),
+        Some(row) => {
+            let advisories: Vec<String> = row["crates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|c| c["advisories"].as_array().into_iter().flatten().map(move |a| (c, a)))
+                .filter(|(_, a)| a["affects_pinned_version"] == true && a["informational"].is_null())
+                .map(|(c, a)| {
+                    format!(
+                        "{} {}",
+                        c["name"].as_str().unwrap_or("?"),
+                        a["id"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect();
+            if !advisories.is_empty() {
+                failures.push(format!("advisories: {}", advisories.join(", ")));
+            }
+        }
     }
     match maintained(data, krate) {
         Some(true) => {}
-        Some(false) => failures.push("no release or substantive commit within twelve months".into()),
-        None => return Clause::Pending("no maintenance.toml entry".into()),
+        Some(false) => failures.push("no release or code change within twelve months".into()),
+        None => pending.push("no maintenance.toml entry"),
     }
-    if failures.is_empty() {
-        Clause::Pass("no open soundness issue or advisory, and maintained".into())
-    } else {
+    if !failures.is_empty() {
         Clause::Fail(failures.join("; "))
+    } else if !pending.is_empty() {
+        Clause::Pending(pending.join("; "))
+    } else {
+        Clause::Pass("no open soundness issue or advisory, and maintained".into())
     }
 }
 
@@ -426,6 +455,47 @@ pub fn to_json(verdicts: &[Verdict]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One fuzz run of ciborium that a sanitizer stopped.
+    fn sanitized(data: &mut Data) {
+        data.fuzz.push(json!({
+            "set": "ciborium", "backend": "ciborium", "config": "portable", "target": "decode_value",
+            "finished": true, "divergence_found": false,
+            "sanitizer_report": "==9==ERROR: AddressSanitizer: heap-buffer-overflow",
+        }));
+    }
+
+    /// An open issue fails clause 4 although the footprint and the
+    /// maintenance entry, which would only make it pending, are missing.
+    #[test]
+    fn a_failure_outranks_missing_evidence() {
+        let mut data = Data {
+            soundness: toml::from_str("[ciborium]\nopen = [\"#1 unsound\"]\n").unwrap(),
+            ..Data::default()
+        };
+        let c4 = soundness(&data, "ciborium", "ciborium");
+        assert!(matches!(&c4, Clause::Fail(why) if why.contains("1 open")), "{c4:?}");
+        data.soundness = toml::from_str("[ciborium]\nopen = []\n").unwrap();
+        assert_eq!(soundness(&data, "ciborium", "ciborium").word(), "pending");
+    }
+
+    /// Recorded as no divergence (as runs before the fix were), the report
+    /// still fails clause 3 on it, and clause 4 as unsoundness.
+    #[test]
+    fn a_sanitizer_report_fails_clauses_3_and_4() {
+        let mut data = Data::default();
+        sanitized(&mut data);
+        let c3 = conformance(&data, "ciborium", "ciborium");
+        assert!(
+            matches!(&c3, Clause::Fail(why) if why.contains("fuzzing diverged")),
+            "{c3:?}"
+        );
+        let c4 = soundness(&data, "ciborium", "ciborium");
+        assert!(
+            matches!(&c4, Clause::Fail(why) if why.contains("AddressSanitizer")),
+            "{c4:?}"
+        );
+    }
 
     #[test]
     fn licence_expressions() {

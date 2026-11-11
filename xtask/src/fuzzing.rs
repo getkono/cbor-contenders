@@ -190,7 +190,7 @@ fn crashes_since(dir: &Path, since: SystemTime) -> Vec<(PathBuf, u64)> {
 /// stderr. The fork-mode parent exits with its last worker's code, so the
 /// exit status says nothing; a run finished only if the parent reached its
 /// exit line. One that did not (a build failure, a stopped parent, a spawn
-/// failure) cannot pass rule 2, and its tail says why.
+/// failure) cannot pass clause 3, and its tail says why.
 fn finished_run(stderr: &str) -> (bool, Option<String>) {
     let finished = stderr.lines().any(|l| l.starts_with("INFO: exiting:"));
     let tail = (!finished).then(|| {
@@ -211,7 +211,7 @@ fn hex(bytes: &[u8]) -> String {
 /// A sanitizer's memory-error line. A leak (`LeakSanitizer`) and a
 /// `stack-overflow` are left out: safe Rust leaks, and safe recursion on
 /// deeply nested input overflows its stack and aborts; neither is a
-/// soundness defect. Both still crash, so both still count against rule 2:
+/// soundness defect. Both still crash, so both still count against clause 3:
 /// serde_json refuses such input at its recursion limit, and a server whose
 /// codec aborts the process instead has diverged from it.
 fn is_sanitizer_error(line: &str) -> bool {
@@ -248,8 +248,10 @@ fn normalise(line: &str) -> String {
 #[derive(Debug, PartialEq, Eq)]
 struct Findings {
     crash_count: usize,
-    /// Some crash was not a sanitizer report: a panic, an assertion that
-    /// fired on a disagreement with serde_json.
+    /// Some input crashed the target: a panic, an assertion that fired on a
+    /// disagreement with the oracle, an abort, or a sanitizer report. A
+    /// memory error the sanitizer caught is a divergence too (clause 3), as
+    /// well as unsoundness (clause 4, which reads `sanitizer_report`).
     divergence: bool,
     /// The first assertion message, from the replay.
     assertion: Option<String>,
@@ -298,7 +300,7 @@ impl Findings {
             .join(" ");
         Self {
             crash_count,
-            divergence: panicked || (crash_count > 0 && sanitizer_report.is_none()),
+            divergence: panicked || crash_count > 0 || sanitizer_report.is_some(),
             assertion: (!assertion.is_empty()).then_some(assertion),
             sanitizer_report,
         }
@@ -434,9 +436,9 @@ mod tests {
     }
 
     #[test]
-    fn a_sanitizer_report_alone_is_not_a_divergence() {
+    fn a_sanitizer_report_alone_is_a_divergence() {
         let found = Findings::read(ASAN_RELAYED, ASAN_REPLAY, 1);
-        assert!(!found.divergence);
+        assert!(found.divergence);
         let report = found.sanitizer_report.unwrap_or_default();
         assert!(report.starts_with("==9==ERROR: AddressSanitizer: heap-buffer-overflow"));
         assert!(report.ends_with("SUMMARY: AddressSanitizer: heap-buffer-overflow src/lib.rs:3 in parse"));
