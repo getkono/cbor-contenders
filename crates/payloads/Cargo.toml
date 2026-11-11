@@ -1,0 +1,33 @@
+[package]
+name = "payloads"
+description = "Workload types and the deterministic generators that produce their bytes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# minicbor's own derive on the types the native formats carry. Forwarded by
+# the binaries of the `minicbor` set only, with `codecs/minicbor`.
+minicbor = ["dep:minicbor", "codecs/minicbor"]
+
+[dependencies]
+bytes.workspace = true
+codecs.workspace = true
+serde.workspace = true
+serde_bytes.workspace = true
+serde_json.workspace = true
+serde_cbor.workspace = true
+prost.workspace = true
+# Pinned beside prost: prost's own requirement would resolve a newer derive.
+prost-derive = "=0.14.4"
+minicbor = { workspace = true, optional = true, features = ["derive"] }
+base64 = "=0.22.1"
+
+[dev-dependencies]
+faithful.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
