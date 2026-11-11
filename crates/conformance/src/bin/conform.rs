@@ -174,7 +174,7 @@ fn main() -> ExitCode {
         Some("encode-hashmap") => ExitCode::from(conformance::deterministic::child(&args[1..])),
         _ => {
             eprintln!(
-                "usage: conform | conform suite <backend> | conform depth-probe <backend> <array|object> <depth> <value|ignored> <stack_bytes> | conform encode-hashmap <backend>"
+                "usage: conform | conform suite <backend> | conform depth-probe <backend> <shape> <depth> <target> <stack_bytes> | conform encode-hashmap <backend>"
             );
             ExitCode::from(2)
         }

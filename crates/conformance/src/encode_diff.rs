@@ -184,6 +184,17 @@ pub fn run<B: Backend>() -> Section {
             },
         );
     }
+    // The values are checked on the suite's own stack, which is far larger
+    // than a server's: whether the same workloads fit a server's is
+    // `depth`'s, which decodes and encodes every `nested-*` on 2 MiB and
+    // 8 MiB stacks in a subprocess and gates a crash.
+    section.data(
+        "stack",
+        json!({
+            "bytes": crate::SUITE_STACK,
+            "server_stacks": "depth: workload/{owned,borrowed,encode}/{2,8}MiB",
+        }),
+    );
     section
 }
 

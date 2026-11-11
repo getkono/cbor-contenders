@@ -6,7 +6,7 @@ use bytes::Bytes;
 use codecs::backend::serde_cbor::SerdeCbor;
 use codecs::{Backend, Body, Class, Failure, Format, Trailing};
 use conformance::record::Section;
-use conformance::{attributes, lengths, strings};
+use conformance::{attributes, depth, lengths, strings};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -144,4 +144,31 @@ fn the_oracle_passes_lengths() {
     let section = lengths::run::<SerdeCbor>();
     assert!(section.cases() > 0);
     assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+}
+
+/// Every depth probe, the recursive struct, indefinite nesting and the
+/// `nested-*` workloads included, runs in a child of the `conform` binary.
+/// The oracle accepts 127 levels and refuses 128 on every shape and target,
+/// and never crashes decoding.
+#[test]
+fn the_oracle_refuses_past_its_depth_on_every_shape() {
+    let exe = std::path::Path::new(env!("CARGO_BIN_EXE_conform"));
+    let probes = depth::probe_all(exe, SerdeCbor::NAME);
+    for (job, probe) in depth::jobs().into_iter().zip(&probes) {
+        let what = format!("{job:?}: {probe:?}");
+        match job.target {
+            depth::Decoded::Encode => {}
+            depth::Decoded::Owned | depth::Decoded::Borrowed => {
+                let expected = if job.depth < 128 {
+                    depth::Probe::Accepted
+                } else {
+                    depth::Probe::Rejected(400)
+                };
+                assert_eq!(*probe, expected, "{what}");
+            }
+            _ if job.depth < 128 => assert_eq!(*probe, depth::Probe::Accepted, "{what}"),
+            _ => assert_eq!(*probe, depth::Probe::Rejected(400), "{what}"),
+        }
+    }
+    assert_eq!(probes.len(), depth::jobs().len());
 }
