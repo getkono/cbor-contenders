@@ -6,7 +6,7 @@ use bytes::Bytes;
 use codecs::backend::serde_cbor::SerdeCbor;
 use codecs::{Backend, Body, Class, Failure, Format, Trailing};
 use conformance::record::Section;
-use conformance::{attributes, strings};
+use conformance::{attributes, lengths, strings};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -133,4 +133,15 @@ fn not_borrowing_is_recorded_alike_and_never_gated() {
             }
         }
     }
+}
+
+/// The oracle is a lazy decoder that reads item by item and allocates only
+/// what it has read: every body is refused with 400 on its own target, and
+/// nothing is allocated near the declared size. A body that fails a correct
+/// lazy decoder would be a case judging precedence, not length.
+#[test]
+fn the_oracle_passes_lengths() {
+    let section = lengths::run::<SerdeCbor>();
+    assert!(section.cases() > 0);
+    assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
 }
