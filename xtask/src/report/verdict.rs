@@ -332,7 +332,10 @@ fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
                 .into_iter()
                 .flatten()
                 .flat_map(|c| c["advisories"].as_array().into_iter().flatten().map(move |a| (c, a)))
-                .filter(|(_, a)| a["affects_pinned_version"] == true && a["informational"].is_null())
+                // Whatever its `informational` kind: RustSec files an
+                // unsoundness as `informational = "unsound"`, and an
+                // unmaintained crate as `"unmaintained"`; both fail.
+                .filter(|(_, a)| a["affects_pinned_version"] == true)
                 .map(|(c, a)| {
                     format!(
                         "{} {}",
@@ -477,6 +480,29 @@ mod tests {
         assert!(matches!(&c4, Clause::Fail(why) if why.contains("1 open")), "{c4:?}");
         data.soundness = toml::from_str("[ciborium]\nopen = []\n").unwrap();
         assert_eq!(soundness(&data, "ciborium", "ciborium").word(), "pending");
+    }
+
+    /// RustSec files unsoundness as informational; it still fails.
+    #[test]
+    fn an_informational_advisory_on_the_pinned_version_fails() {
+        let mut data = Data {
+            soundness: toml::from_str("[ciborium]\nopen = []\n").unwrap(),
+            maintenance: toml::from_str("as_of = \"2026-11-11\"\n[ciborium]\nlast_release = \"2026-10-01\"\n").unwrap(),
+            ..Data::default()
+        };
+        let advisory = |affects: bool| {
+            json!({ "set": "ciborium", "crate": "ciborium", "crates": [{ "name": "ciborium", "advisories": [
+                { "id": "RUSTSEC-2099-0001", "informational": "unsound", "affects_pinned_version": affects },
+            ] }] })
+        };
+        data.footprint = vec![advisory(false)];
+        assert_eq!(soundness(&data, "ciborium", "ciborium").word(), "pass");
+        data.footprint = vec![advisory(true)];
+        let c4 = soundness(&data, "ciborium", "ciborium");
+        assert!(
+            matches!(&c4, Clause::Fail(why) if why.contains("RUSTSEC-2099-0001")),
+            "{c4:?}"
+        );
     }
 
     /// Recorded as no divergence (as runs before the fix were), the report
