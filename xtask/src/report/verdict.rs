@@ -384,16 +384,63 @@ pub fn maintained(data: &Data, krate: &str) -> Option<bool> {
     Some(as_of - latest <= 365)
 }
 
-/// Whether an SPDX expression is acceptable under `allowed`: an `OR` (or
-/// `/`) takes any side, an `AND` every side.
+/// Whether an SPDX expression is acceptable under `allowed`. `OR` (or the
+/// legacy `/`) takes any side, `AND` every side, `AND` binds tighter than
+/// `OR`, and parentheses group. `X WITH Y` is acceptable only if the allow
+/// list names it whole (`Apache-2.0 WITH LLVM-exception`), as cargo-deny's
+/// does. An expression that does not parse is not acceptable.
 pub fn licence_ok(expression: &str, allowed: &[String]) -> bool {
-    expression.split(" OR ").flat_map(|p| p.split('/')).any(|alternative| {
-        alternative.split(" AND ").all(|l| {
-            allowed
-                .iter()
-                .any(|a| a == l.trim().trim_matches(|c| c == '(' || c == ')'))
-        })
-    })
+    let spaced = expression.replace('(', " ( ").replace(')', " ) ").replace('/', " OR ");
+    let tokens: Vec<&str> = spaced.split_whitespace().collect();
+    let mut at = 0;
+    let ok = spdx_or(&tokens, &mut at, allowed);
+    ok.is_some_and(|ok| ok && at == tokens.len())
+}
+
+/// The operators and brackets of an SPDX expression: never a licence name.
+const SPDX_SYNTAX: &[&str] = &["(", ")", "OR", "AND", "WITH"];
+
+/// `and ("OR" and)*`.
+fn spdx_or(tokens: &[&str], at: &mut usize, allowed: &[String]) -> Option<bool> {
+    let mut ok = spdx_and(tokens, at, allowed)?;
+    while tokens.get(*at) == Some(&"OR") {
+        *at += 1;
+        ok |= spdx_and(tokens, at, allowed)?;
+    }
+    Some(ok)
+}
+
+/// `term ("AND" term)*`.
+fn spdx_and(tokens: &[&str], at: &mut usize, allowed: &[String]) -> Option<bool> {
+    let mut ok = spdx_term(tokens, at, allowed)?;
+    while tokens.get(*at) == Some(&"AND") {
+        *at += 1;
+        ok &= spdx_term(tokens, at, allowed)?;
+    }
+    Some(ok)
+}
+
+/// `"(" or ")"`, or `licence ["WITH" exception]`.
+fn spdx_term(tokens: &[&str], at: &mut usize, allowed: &[String]) -> Option<bool> {
+    let token = *tokens.get(*at)?;
+    *at += 1;
+    if token == "(" {
+        let ok = spdx_or(tokens, at, allowed)?;
+        (tokens.get(*at) == Some(&")")).then_some(())?;
+        *at += 1;
+        return Some(ok);
+    }
+    if SPDX_SYNTAX.contains(&token) {
+        return None;
+    }
+    let name = if tokens.get(*at) == Some(&"WITH") {
+        let exception = tokens.get(*at + 1).filter(|e| !SPDX_SYNTAX.contains(*e))?;
+        *at += 2;
+        format!("{token} WITH {exception}")
+    } else {
+        token.to_owned()
+    };
+    Some(allowed.contains(&name))
 }
 
 /// Clause 5 for `krate`: its own licence and that of every runtime crate it
@@ -531,6 +578,24 @@ mod tests {
         assert!(licence_ok("Apache-2.0", &allowed));
         assert!(!licence_ok("BlueOak-1.0.0", &allowed));
         assert!(!licence_ok("MIT AND BlueOak-1.0.0", &allowed));
+    }
+
+    #[test]
+    fn licence_expressions_group_and_bind_as_spdx_says() {
+        let allowed: Vec<String> = ["MIT", "Apache-2.0", "Unicode-3.0", "Apache-2.0 WITH LLVM-exception"]
+            .map(str::to_owned)
+            .to_vec();
+        assert!(!licence_ok("(MIT OR Apache-2.0) AND BlueOak-1.0.0", &allowed));
+        assert!(licence_ok("(MIT OR Apache-2.0) AND Unicode-3.0", &allowed));
+        // AND binds tighter than OR.
+        assert!(licence_ok("BlueOak-1.0.0 AND MIT OR Apache-2.0", &allowed));
+        assert!(!licence_ok("BlueOak-1.0.0 AND (MIT OR Apache-2.0)", &allowed));
+        assert!(licence_ok("Apache-2.0 WITH LLVM-exception OR MIT", &allowed));
+        assert!(!licence_ok("MIT WITH LLVM-exception", &allowed));
+        assert!(licence_ok("((MIT))", &allowed));
+        for broken in ["", "MIT OR", "(MIT", "MIT)", "AND MIT", "MIT WITH", "MIT Apache-2.0"] {
+            assert!(!licence_ok(broken, &allowed), "{broken:?}");
+        }
     }
 
     #[test]
