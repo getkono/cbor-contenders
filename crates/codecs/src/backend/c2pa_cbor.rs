@@ -3,7 +3,20 @@
 //! A maintained descendant of serde_cbor's API. `from_slice` reads through a
 //! `Cursor` (so a `Cow` field decodes owned: its lifetime is not the
 //! input's), caps allocation and depth, and refuses trailing data.
-
+//!
+//! # What its error can tell apart
+//!
+//! `Syntax(String)` carries every refusal the decoder makes itself, so the
+//! adapter answers all of them 400. That is right for an ill-formed head,
+//! the depth limit, the allocation cap, trailing data and an empty body, and
+//! wrong for the well-formed bodies of the wrong shape it also refuses there
+//! (`decoder.rs`): an enum that is neither text nor a one-entry map, a unit
+//! variant given data or a data variant given none, and an `Option` of a
+//! simple value or an indefinite string. Telling them apart would mean
+//! reading the message, which the adapter does not do. `Serde(String)` is
+//! every refusal through serde's `Error::custom`: 422. Its `deserialize_struct`
+//! forwards to `deserialize_any`, so a struct is read from an array as from
+//! a map, which no error reports.
 use bytes::Bytes;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -19,8 +32,8 @@ fn failure(error: &c2pa_cbor::Error) -> Failure {
     let class = match error {
         Error::Io(_) => Class::Io,
         Error::Eof => Class::Eof,
-        // Its `Syntax` also carries the trailing-data and empty-input
-        // refusals, and invalid UTF-8 has its own variant: all 400.
+        // The module docs name what `Syntax` carries; invalid UTF-8 has its
+        // own variant: all 400.
         Error::InvalidUtf8 | Error::Syntax(_) | Error::TrailingData => Class::Syntax,
         // Every serde refusal arrives through `Error::custom`.
         Error::Serde(_) | Error::Encoding(_) => Class::Data,

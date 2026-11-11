@@ -2,7 +2,29 @@
 //!
 //! Its entry points are `DeserializeOwned` only (it never hands out a slice of
 //! the input), read through `std::io::Read`, and stop after the first item.
-
+//!
+//! # What its error can tell apart
+//!
+//! `Syntax` is what ciborium-ll's header parser refuses: additional
+//! information 28 to 30, an indefinite length on an integer or a tag, a
+//! chunk of another type in an indefinite string, and text that is not
+//! UTF-8. `Semantic` is every serde refusal. Two ill-formed bodies reach a
+//! typed decode as a header of the wrong type and arrive as `Semantic`, so
+//! they are answered 422:
+//!
+//! - a break where an item belongs (`ff`, `82 01 ff`): the header parser
+//!   returns `Header::Break` and the deserializer reports it as an
+//!   unexpected "break";
+//! - a two-byte simple value below 32 (`f8 18`): the parser reads it as
+//!   `Header::Simple(24)`, which the deserializer refuses as an unknown
+//!   simple value, as it does a well-formed unassigned one.
+//!
+//! Its own checks on a well-formed item (an integer too large, a bignum over
+//! 16 bytes) are `Semantic` too, which is right. A decode of a named type
+//! (`deserialize_str`, `deserialize_u64`, ...) skips every tag it meets,
+//! and an indefinite chunk inside an indefinite string is accepted, so
+//! neither is an error at all; `deserialize_any` hands a tag to the visitor
+//! as an enum.
 use bytes::Bytes;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -12,6 +34,7 @@ use crate::{Backend, Body, Class, Failure, Format, Trailing};
 #[derive(Debug)]
 pub struct Ciborium;
 
+#[cold]
 fn decode_failure(error: &ciborium::de::Error<std::io::Error>) -> Failure {
     use ciborium::de::Error;
     match error {
@@ -20,9 +43,8 @@ fn decode_failure(error: &ciborium::de::Error<std::io::Error>) -> Failure {
         Error::Io(io) => Failure::new(Class::Eof, io),
         Error::Syntax(offset) => Failure::new(Class::Syntax, "syntax error").at(Some(*offset)),
         // Every serde refusal (wrong type, unknown variant, integer out of
-        // range, duplicate field) and ciborium's own checks on a well-formed
-        // item. It cannot tell an invalid item (a bignum tag on a non-byte
-        // string) from a wrong shape: both arrive here.
+        // range, duplicate field), ciborium's own checks on a well-formed
+        // item, and the two ill-formed bodies the module docs name.
         Error::Semantic(offset, message) => Failure::new(Class::Data, message).at(*offset),
         Error::RecursionLimitExceeded => Failure::new(Class::Syntax, "recursion limit exceeded"),
     }
