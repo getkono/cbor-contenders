@@ -7,7 +7,8 @@
 //! contract. Kynos's `BodyCodec` trust model puts the duty on the codec: a
 //! value the schema cannot describe is refused at `decode` or `encode`. This
 //! crate is that refusal, written once and independent of the CBOR library
-//! underneath: [`scan`] before a decode, [`Faithful`] around an encode.
+//! underneath: [`scan`] before a decode, [`Profiled`] around the decoded
+//! type, [`Faithful`] around an encode.
 //!
 //! # The rules
 //!
@@ -39,9 +40,18 @@
 //! Integer map keys are what JSON would stringify; CBOR would write them as
 //! integers, so the profile refuses them rather than write a key the schema
 //! says is a string.
+//!
+//! Both halves present a human-readable serde view ([`Profiled`] on decode,
+//! [`Faithful`] on encode), so a type whose serde impl switches on
+//! `is_human_readable` (`Uuid`, the IP address types) is read and written
+//! as the string Kynos's schema describes, as `Json<T>` reads and writes it.
+//! [`Profiled`] also refuses a struct read from an array, which serde's
+//! derive allows and `Json<T>` refuses: 422.
 
 mod guard;
+mod profiled;
 mod scan;
 
 pub use guard::Faithful;
+pub use profiled::Profiled;
 pub use scan::{MAX_DEPTH, Refusal, Rule, preferred, scan, well_formed};
