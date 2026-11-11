@@ -35,6 +35,7 @@ c2pa_cbor = { workspace = true, optional = true }
 
 [dev-dependencies]
 alloc-count.workspace = true
+serde_bytes.workspace = true
 
 [lints]
 workspace = true
