@@ -102,6 +102,7 @@ pub fn render(data: &Data, verdicts: &[Verdict], exports: &[Export], notes: &[St
     model_section(data, &mut out);
     fuzz_section(data, &mut out);
     e2e_section(data, &mut out);
+    cross_check_section(data, &mut out);
     exports_section(exports, &mut out);
     provenance_section(data, &mut out);
     out
@@ -702,8 +703,7 @@ fn e2e_section(data: &Data, out: &mut String) {
         "End to end: timed",
         "Closed-loop throughput at 64 connections and open-loop p99 at 70 % of serde_json's \
          throughput, median of reps, over loopback, against serde_json's and prost's A/A copies. \
-         Section 6's cross-check: a timed gain far beyond what the counted codec share allows is a \
-         measurement error to explain, not a result.",
+         Section 6's cross-check of these against the counts is the next section.",
     );
     let timed = |entry: &str, route: &str| {
         data.host
@@ -756,6 +756,53 @@ fn e2e_section(data: &Data, out: &mut String) {
             "vs serde_json",
             "Saturated",
             "Verdict",
+        ],
+        &rows,
+    );
+}
+
+fn cross_check_section(data: &Data, out: &mut String) {
+    section(
+        out,
+        "cross-check",
+        "Section 6's cross-check",
+        "For each CBOR entry and route: its timed throughput over serde_json's, its counted speedup \
+         (serde_json's estimated cycles per request over its own), serde_json's codec share `s` \
+         against the entry's floor, and the most any codec could gain, `1 ÷ (1 − s)`, the speedup \
+         if the entry's codec cost nothing. A timed gain beyond that bound (and beyond serde_json's \
+         A/A band) is a measurement error to explain, not a result, and holds the entry's clause 2 \
+         pending.",
+    );
+    let rows: Vec<Vec<String>> = super::verdict::cross_checks(data)
+        .into_iter()
+        .map(|c| {
+            vec![
+                c.route.to_owned(),
+                code(c.entry),
+                format!("{:.2}×", c.timed),
+                format!("{:.2}×", c.counted),
+                format!("{:.0} %", c.share * 100.0),
+                format!("{:.2}×", c.bound),
+                format!("{:.1} %", c.band * 100.0),
+                if c.flagged {
+                    "measurement error to explain".into()
+                } else {
+                    "consistent".into()
+                },
+            ]
+        })
+        .collect();
+    table(
+        out,
+        &[
+            "Route",
+            "Entry",
+            "Timed",
+            "Counted",
+            "serde_json codec share",
+            "Bound",
+            "A/A band",
+            "Check",
         ],
         &rows,
     );

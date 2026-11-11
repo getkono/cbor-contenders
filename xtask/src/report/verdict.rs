@@ -234,11 +234,135 @@ pub fn win_trust(data: &Data, axis: &Axis, entry: &str, workload: &str) -> &'sta
     if canonical { "canonical" } else { "solo" }
 }
 
+/// #989 section 6's cross-check on one route: an entry's timed throughput
+/// against serde_json's, beside what the counted codec share allows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrossCheck {
+    pub route: &'static str,
+    pub entry: &'static str,
+    /// Timed throughput over serde_json's (`1.10` is 10 % more requests per
+    /// second).
+    pub timed: f64,
+    /// Counted speedup over serde_json: serde_json's estimated cycles per
+    /// request over the entry's.
+    pub counted: f64,
+    /// serde_json's codec share against the entry's floor, `s = (serde_json
+    /// − floor) ÷ serde_json`.
+    pub share: f64,
+    /// The most any codec could speed the request up: `1 ÷ (1 − s)`, the
+    /// speedup if the entry's codec cost nothing.
+    pub bound: f64,
+    /// serde_json's A/A throughput gap on the route, in the medians or any
+    /// rep; 0 without a copy.
+    pub band: f64,
+    /// The timed gain exceeds the bound beyond the band: a measurement error
+    /// to explain, not a result.
+    pub flagged: bool,
+}
+
+/// [`CrossCheck`] for every CBOR entry served end to end and every route
+/// where both the timed and the counted figures exist.
+#[must_use]
+pub fn cross_checks(data: &Data) -> Vec<CrossCheck> {
+    let counted = |entry: &str, route: &str| {
+        data.e2e_count
+            .iter()
+            .find(|r| r["backend"] == entry && r["route"] == route && r["variant"] == DECIDING_VARIANT)
+            .and_then(|r| r["est_cycles"].as_f64())
+            .filter(|c| *c > 0.0)
+    };
+    let timed = |entry: &str, route: &str| {
+        data.host
+            .e2e_time
+            .iter()
+            .find(|r| r["backend"] == entry && r["route"] == route && r["variant"] == DECIDING_VARIANT)
+    };
+    let mut out = Vec::new();
+    for route in crate::endtoend::ROUTES {
+        let route = route.0;
+        let Some(sj) = timed("serde_json", route) else {
+            continue;
+        };
+        let Some(sj_rps) = sj["rps"].as_f64().filter(|r| *r > 0.0) else {
+            continue;
+        };
+        let rps_of = |r: &Value| r["rps"].as_f64();
+        let band = timed("serde_json#aa", route).map_or(0.0, |aa| {
+            let reps = |r: &Value| -> Vec<f64> {
+                r["reps"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x["closed"]["rps"].as_f64())
+                    .collect()
+            };
+            let gap = |x: f64, y: f64| if x > 0.0 { (y / x - 1.0).abs() } else { 0.0 };
+            let median = rps_of(aa).map_or(0.0, |a| gap(sj_rps, a));
+            reps(sj)
+                .into_iter()
+                .zip(reps(aa))
+                .map(|(x, y)| gap(x, y))
+                .fold(median, f64::max)
+        });
+        for entry in crate::matrix::e2e_entries_all() {
+            if crate::endtoend::format_of(entry) != codecs::Format::Cbor {
+                continue;
+            }
+            let (Some(me), Some(sj_count), Some(my_count), Some(floor)) = (
+                timed(entry, route),
+                counted("serde_json", route),
+                counted(entry, route),
+                counted(crate::matrix::floor_of(entry), route),
+            ) else {
+                continue;
+            };
+            let Some(my_rps) = rps_of(me) else { continue };
+            let share = ((sj_count - floor) / sj_count).clamp(0.0, 1.0);
+            let bound = if share < 1.0 {
+                1.0 / (1.0 - share)
+            } else {
+                f64::INFINITY
+            };
+            let ratio = my_rps / sj_rps;
+            out.push(CrossCheck {
+                route,
+                entry,
+                timed: ratio,
+                counted: sj_count / my_count,
+                share,
+                bound,
+                band,
+                flagged: ratio > bound * (1.0 + band),
+            });
+        }
+    }
+    out
+}
+
 /// Clause 2 for `entry`. A win on a deterministic axis (heap, size) is
 /// settled; a cycles win measured at `solo` trust is provisional, so it
 /// leaves the clause pending until a quiet host has measured it, as does a
 /// cycles win beyond ε that only a `solo` A/A band hides.
 fn frontier(data: &Data, entry: &str) -> Clause {
+    // A timed gain the counts cannot account for says the host's timing is
+    // not to be read, and clause 2's cycles come from the same host: the
+    // clause waits for the error to be explained, whatever it would say.
+    let flagged: Vec<String> = cross_checks(data)
+        .into_iter()
+        .filter(|c| c.entry == entry && c.flagged)
+        .map(|c| {
+            format!(
+                "{} ({:.2}× timed, at most {:.2}× by the counts)",
+                c.route, c.timed, c.bound
+            )
+        })
+        .collect();
+    if !flagged.is_empty() {
+        return Clause::Pending(format!(
+            "measurement error to explain (#989 section 6): {}",
+            flagged.join(", ")
+        ));
+    }
     let mut pending = Vec::new();
     let mut settled = Vec::new();
     let mut provisional = Vec::new();
@@ -917,6 +1041,47 @@ mod tests {
         assert!(
             matches!(&canonical, Clause::Pass(why) if why.contains("decode cycles")),
             "{canonical:?}"
+        );
+    }
+
+    /// Counted: serde_json 100 cycles a request over a floor of 80, so a
+    /// free codec would be at most 1.25× faster. Timed `ratio`× faster.
+    fn routed(ratio: f64) -> Data {
+        let mut data = Data::default();
+        for (entry, est) in [("serde_json", 100.0), ("ciborium", 90.0), ("floor-cbor", 80.0)] {
+            data.e2e_count.push(
+                json!({ "backend": entry, "route": "echo-post", "variant": DECIDING_VARIANT, "est_cycles": est }),
+            );
+        }
+        for (entry, rps) in [
+            ("serde_json", 1000.0),
+            ("serde_json#aa", 1010.0),
+            ("ciborium", 1000.0 * ratio),
+        ] {
+            data.host
+                .e2e_time
+                .push(json!({ "backend": entry, "route": "echo-post", "variant": DECIDING_VARIANT, "rps": rps }));
+        }
+        data
+    }
+
+    #[test]
+    fn a_timed_gain_beyond_the_counted_share_is_flagged() {
+        let ok = cross_checks(&routed(1.20));
+        assert_eq!(ok.len(), 1);
+        assert!(
+            (ok[0].bound - 1.25).abs() < 1e-9 && (ok[0].share - 0.2).abs() < 1e-9,
+            "{ok:?}"
+        );
+        assert!(!ok[0].flagged, "{ok:?}");
+        // 1.26 is beyond 1.25 but inside the 1 % A/A band; 1.40 is not.
+        assert!(!cross_checks(&routed(1.26))[0].flagged);
+        let off = cross_checks(&routed(1.40));
+        assert!(off[0].flagged, "{off:?}");
+        let c2 = frontier(&routed(1.40), "ciborium");
+        assert!(
+            matches!(&c2, Clause::Pending(why) if why.contains("section 6")),
+            "{c2:?}"
         );
     }
 
