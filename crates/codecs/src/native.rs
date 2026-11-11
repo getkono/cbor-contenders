@@ -94,9 +94,15 @@ pub mod support {
         T::decode(body).map_err(|e| Failure::new(Class::Syntax, e))
     }
 
-    /// prost's encode, into a `Vec` (which grows, so it cannot fail).
+    /// prost's encode, appended to `out` with room for it reserved first:
+    /// what `encode_to_vec` does (`Vec::with_capacity(encoded_len)`, then
+    /// `encode_raw`), into a buffer that may already hold capacity. Calling
+    /// `encode` instead would compute `encoded_len` a second time for its
+    /// capacity check, which a `Vec` always passes.
     pub fn proto_encode<T: ::prost::Message>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure> {
-        value.encode(out).map_err(|e| Failure::new(Class::Io, e))
+        out.reserve(value.encoded_len());
+        value.encode_raw(out);
+        Ok(())
     }
 
     /// prost's `encode_to_vec`: a buffer of exactly `encoded_len`, written
