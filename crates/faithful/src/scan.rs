@@ -327,7 +327,7 @@ impl<'a> Walker<'a> {
                         if is_key && head.major == 3 {
                             // An indefinite key is compared by its
                             // concatenation, which needs a copy.
-                            let key = self.indefinite_key(head.offset)?;
+                            let key = self.indefinite_key()?;
                             self.keys.push(Cow::Owned(key));
                             if self.item_done(head.offset) {
                                 return self.finish();
@@ -499,20 +499,25 @@ impl<'a> Walker<'a> {
     }
 
     /// Read an indefinite-length text key's chunks into one key.
-    fn indefinite_key(&mut self, offset: usize) -> Result<Vec<u8>, Refusal> {
+    ///
+    /// Each chunk must be UTF-8 on its own (RFC 8949 §3.2.3), as a value's
+    /// chunks are: a code point split across two chunks is invalid even
+    /// though the concatenation would decode.
+    fn indefinite_key(&mut self) -> Result<Vec<u8>, Refusal> {
         let mut key = Vec::new();
         loop {
             let head = self.head()?;
             if head.major == 7 && head.info == 31 {
-                if std::str::from_utf8(&key).is_err() {
-                    return refuse(Rule::InvalidUtf8, offset);
-                }
                 return Ok(key);
             }
             if head.major != 3 || head.info == 31 {
                 return refuse(Rule::BadChunk, head.offset);
             }
-            key.extend_from_slice(self.take(head.arg, head.offset)?);
+            let chunk = self.take(head.arg, head.offset)?;
+            if std::str::from_utf8(chunk).is_err() {
+                return refuse(Rule::InvalidUtf8, head.offset);
+            }
+            key.extend_from_slice(chunk);
         }
     }
 

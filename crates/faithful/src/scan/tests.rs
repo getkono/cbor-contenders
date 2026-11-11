@@ -38,6 +38,10 @@ fn ill_formed_input_is_400() {
         ("01 01", Rule::Trailing),
         ("61 ff", Rule::InvalidUtf8),
         ("7f 61 c3 61 a9 ff", Rule::InvalidUtf8),
+        // The same split code point, as a key, definite and indefinite map.
+        ("a1 7f 61 c3 61 a9 ff 01", Rule::InvalidUtf8),
+        ("bf 7f 61 c3 61 a9 ff 01 ff", Rule::InvalidUtf8),
+        ("a1 7f 61 ff ff 01", Rule::InvalidUtf8),
         ("bf 61 61 ff", Rule::StrayBreak),
         ("9f c0 ff", Rule::TagWithoutContent),
         ("bf c0 ff", Rule::TagWithoutContent),
@@ -129,6 +133,8 @@ fn transparent_encodings_are_accepted() {
         "7f 62 6869 62 6869 ff",
         "9f 01 02 ff",
         "bf 61 61 01 61 62 9f ff ff",
+        // An indefinite key whose every chunk is UTF-8.
+        "a1 7f 62 c3a9 61 61 ff 01",
         // Non-preferred heads and floats.
         "19 0001",
         "1b 0000000000000001",
