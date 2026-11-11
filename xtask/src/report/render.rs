@@ -327,9 +327,10 @@ fn costs_section(data: &Data, out: &mut String) {
         "costs",
         "What adopting one costs besides CPU",
         "`.text` added to a fixture that decodes and re-encodes the two Kynos body types (minus the \
-         same program without a codec), clean and incremental compile times of that fixture \
-         (median of its runs; adoption context, not an axis), whether the adapter builds on Rust \
-         1.85 (Kynos's MSRV), the crates each adds and their `unsafe`, and their licences.",
+         same program without a codec; axis 5), clean and incremental compile times of that \
+         fixture (median of its runs; axis 6), whether the adapter and the worked codec build on \
+         Rust 1.85 (Kynos's MSRV) where the baseline set, the control, does (axis 6), the crates \
+         each adds and their `unsafe` (axis 7), and their licences (clause 5).",
     );
     let mut rows = Vec::new();
     for set in SETS {
@@ -361,10 +362,20 @@ fn costs_section(data: &Data, out: &mut String) {
                 compile["incremental_s"]
                     .as_f64()
                     .map_or_else(|| "–".into(), |s| format!("{s:.2} s")),
-                match msrv["builds_on_msrv"].as_bool() {
-                    Some(true) => "yes".into(),
-                    Some(false) => format!("no ({})", msrv["first_error"].as_str().unwrap_or("?")),
-                    None => "–".into(),
+                match msrv["verdict"].as_str() {
+                    Some("builds") => "yes".into(),
+                    Some("fails") => format!(
+                        "no ({})",
+                        msrv["first_error"]
+                            .as_str()
+                            .or(msrv["kynos_cbor_first_error"].as_str())
+                            .unwrap_or("?")
+                    ),
+                    Some("inconclusive") => format!(
+                        "inconclusive: the control fails too ({})",
+                        msrv["control_first_error"].as_str().unwrap_or("?")
+                    ),
+                    _ => "–".into(),
                 },
                 msrv["declared"].as_str().unwrap_or("–").to_owned(),
                 opt(foot["runtime_crates_added"].as_f64()),

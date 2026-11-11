@@ -130,9 +130,52 @@ pub fn compile_time(args: &[String]) -> Result<()> {
 /// The Rust version the MSRV probe compiles with (Kynos's MSRV).
 pub const MSRV: &str = "1.85.0";
 
-/// `xtask msrv`: does each backend (through the adapter, which uses nothing
-/// newer than it) compile with Rust 1.85, Kynos's MSRV, and what does it
-/// declare? The baselines share the baseline set's build.
+/// One `cargo +1.85 check` of `package` with `features`: whether it built,
+/// and its first error with the crate it points into.
+fn msrv_check(package: &str, features: &str, dir: &std::path::Path) -> Result<(bool, Option<String>)> {
+    let mut cmd = cargo();
+    cmd.current_dir(root())
+        .arg(format!("+{MSRV}"))
+        .args(["check", "--locked", "-p", package, "--ignore-rust-version"])
+        .env("CARGO_TARGET_DIR", dir)
+        .env("RUSTC_WRAPPER", "");
+    if !features.is_empty() {
+        cmd.args(["--features", features]);
+    }
+    let (ok, _, stderr) = capture(&mut cmd)?;
+    // The error and the file it points into, which names the crate that
+    // needs the newer compiler.
+    let mut lines = stderr.lines().skip_while(|l| !l.starts_with("error"));
+    let first_error = lines.next().map(|e| {
+        let at = lines
+            .find(|l| l.trim_start().starts_with("-->"))
+            .map(|l| l.trim().trim_start_matches("--> "));
+        let at = at.map(|p| p.rsplit("/src/").nth(1).and_then(|c| c.rsplit('/').next()).unwrap_or(p));
+        format!("{e} (in {})", at.unwrap_or("?"))
+    });
+    Ok((ok, first_error))
+}
+
+/// What one set's checks say against the control's: `builds`, `fails` (it
+/// fails where the control builds, so the candidate is what needs the newer
+/// compiler), or `inconclusive` (the control fails too: the harness's own
+/// code, or a crate every set shares, needs it, and says nothing of the
+/// candidate).
+#[must_use]
+pub fn msrv_verdict(builds: bool, control_builds: bool) -> &'static str {
+    match (builds, control_builds) {
+        (true, _) => "builds",
+        (false, true) => "fails",
+        (false, false) => "inconclusive",
+    }
+}
+
+/// `xtask msrv`: does each backend compile with Rust 1.85, Kynos's MSRV,
+/// through its adapter (`codecs`) and through the worked codec
+/// (`kynos-cbor`), and what does it declare? The baseline set, which adds no
+/// candidate, is the control: a set fails only where the control builds, so
+/// a harness crate that needs a newer compiler is not charged to every
+/// candidate.
 pub fn msrv(args: &[String]) -> Result<()> {
     let filter = Filter::parse(args);
     let metadata: Value = serde_json::from_str(&crate::util::output(cargo().current_dir(root()).args([
@@ -150,33 +193,43 @@ pub fn msrv(args: &[String]) -> Result<()> {
             .find(|p| p["name"] == name)
             .map_or(Value::Null, |p| p["rust_version"].clone())
     };
+    let base = root().join("target/msrv");
+    let control = msrv_check("codecs", "", &base.join("baseline"))?;
+    let kynos_control = msrv_check("kynos-cbor", "", &base.join("baseline-kynos-cbor"))?;
     let mut rows = Vec::new();
     for set in filter.sets() {
-        let dir = root().join("target/msrv").join(set.name);
-        let mut cmd = cargo();
-        cmd.current_dir(root())
-            .arg(format!("+{MSRV}"))
-            .args(["check", "--locked", "-p", "codecs", "--ignore-rust-version"])
-            .env("CARGO_TARGET_DIR", &dir)
-            .env("RUSTC_WRAPPER", "");
-        if !set.features.is_empty() {
-            cmd.args(["--features", set.features]);
+        let adapter = if set.name == "baseline" {
+            control.clone()
+        } else {
+            msrv_check("codecs", set.features, &base.join(set.name))?
+        };
+        // The worked codec, wherever it has the candidate's feature.
+        let worked = (set.name != "baseline" && !crate::matrix::e2e_entries(set).is_empty())
+            .then(|| {
+                msrv_check(
+                    "kynos-cbor",
+                    set.features,
+                    &base.join(format!("{}-kynos-cbor", set.name)),
+                )
+            })
+            .transpose()?;
+        let mut verdict = msrv_verdict(adapter.0, control.0);
+        if let Some((ok, _)) = &worked {
+            verdict = match (verdict, msrv_verdict(*ok, kynos_control.0)) {
+                ("fails", _) | (_, "fails") => "fails",
+                ("inconclusive", _) | (_, "inconclusive") => "inconclusive",
+                _ => "builds",
+            };
         }
-        let (ok, _, stderr) = capture(&mut cmd)?;
-        // The error and the file it points into, which names the crate that
-        // needs the newer compiler.
-        let mut lines = stderr.lines().skip_while(|l| !l.starts_with("error"));
-        let first_error = lines.next().map(|e| {
-            let at = lines
-                .find(|l| l.trim_start().starts_with("-->"))
-                .map(|l| l.trim().trim_start_matches("--> "));
-            let at = at.map(|p| p.rsplit("/src/").nth(1).and_then(|c| c.rsplit('/').next()).unwrap_or(p));
-            format!("{e} (in {})", at.unwrap_or("?"))
-        });
         for (krate, _) in set.costs {
             rows.push(json!({
-                "set": set.name, "crate": krate, "declared": declared(krate),
-                "builds_on_msrv": ok, "msrv": MSRV, "first_error": first_error,
+                "set": set.name, "crate": krate, "declared": declared(krate), "msrv": MSRV,
+                "verdict": verdict,
+                "builds_on_msrv": adapter.0, "first_error": adapter.1,
+                "kynos_cbor_builds_on_msrv": worked.as_ref().map(|w| w.0),
+                "kynos_cbor_first_error": worked.as_ref().and_then(|w| w.1.clone()),
+                "control_builds_on_msrv": control.0, "control_first_error": control.1,
+                "kynos_cbor_control_builds_on_msrv": kynos_control.0,
             }));
         }
     }
@@ -185,7 +238,16 @@ pub fn msrv(args: &[String]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pinned_profile, timed_command};
+    use super::{msrv_verdict, pinned_profile, timed_command};
+
+    /// A candidate fails only where the control builds.
+    #[test]
+    fn a_failure_the_control_shares_is_inconclusive() {
+        assert_eq!(msrv_verdict(true, true), "builds");
+        assert_eq!(msrv_verdict(true, false), "builds");
+        assert_eq!(msrv_verdict(false, true), "fails");
+        assert_eq!(msrv_verdict(false, false), "inconclusive");
+    }
 
     fn args(release: bool) -> Vec<String> {
         timed_command(std::path::Path::new("t"), "", release)
