@@ -1,0 +1,32 @@
+# Clause 4's "maintained": a release, or substantive commits, within twelve
+# months of `as_of`. Read by hand from crates.io (release dates) and each
+# repository's default-branch history (commit dates) on `as_of`.
+# `last_substantive_commit` is the latest commit that changes the crate
+# itself (code, manifest, documentation), not CI or dependency-bot bumps.
+
+as_of = "2026-11-11"
+
+[ciborium]
+last_release = "2024-01-24"
+last_substantive_commit = "2025-11-22"
+source = "crates.io/crates/ciborium (0.2.2); github.com/enarx/ciborium main: 2025-11-22 'chore: bump minimum Rust' and 'fix: update readme docs'; the last code change is 2025-08-02 ('refactor: improve 128-bit integer serialization'); every later commit is a CI or dependabot bump. Unreleased since 0.2.2: canonical encoding (#155) and optional half (2025-08-01)."
+
+[minicbor-serde]
+last_release = "2026-10-18"
+source = "crates.io/crates/minicbor-serde (0.7.2)"
+
+[minicbor]
+last_release = "2026-10-18"
+source = "crates.io/crates/minicbor (2.3.1)"
+
+[cbor4ii]
+last_release = "2026-10-19"
+source = "crates.io/crates/cbor4ii (1.2.4)"
+
+[cbor2]
+last_release = "2026-09-23"
+source = "crates.io/crates/cbor2 (1.1.6); the crate was first published 2026-06-12"
+
+[c2pa_cbor]
+last_release = "2026-10-27"
+source = "crates.io/crates/c2pa_cbor (0.78.2)"

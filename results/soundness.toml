@@ -1,0 +1,63 @@
+# Open issues touching soundness, reviewed by hand on 2026-11-11.
+#
+# Found with `gh search issues <term> --repo <repo> --state open` for each of
+# unsound, soundness, "undefined behavior", "stack overflow", miri, plus a
+# read of every open issue title in each candidate's repository. Every hit is
+# listed under `reviewed` with the reason it is or is not a soundness issue
+# for the entry points measured here; only `open` entries fail clause 4. A
+# stack overflow in safe Rust aborts the process (a denial of service, which
+# conformance's `depth` section gates as a crash), so it is not unsound.
+
+[serde_json]
+open = []
+reviewed = [
+  "serde-rs/json#750 PrettyFormatter::with_indent can emit non-UTF-8 to an io::Write: the issue states it is not unsound; pretty output is not used",
+  "serde-rs/json#1262 a setter for the recursion limit: a feature request",
+]
+
+[prost]
+open = []
+reviewed = [
+  "tokio-rs/prost#652, #736 recursion in encode: unbounded recursion on deeply nested messages, a safe-Rust stack overflow; no recursive message is measured",
+  "tokio-rs/prost#924 stack overflow decoding a recursive proto2 message: the same class; RUSTSEC-2020-0002 (patched in 0.6.1) is the earlier instance",
+]
+
+[ciborium]
+open = []
+reviewed = [
+  "enarx/ciborium#18 exposing Serializer: API, not memory safety",
+  "enarx/ciborium#182, #179 GLD Serializer Benchmark compliance and fairness reports: conformance claims, which conformance here measures directly",
+  "enarx/ciborium#153, #127, #99, #138 decoding bugs: behaviour, not memory safety",
+]
+
+[minicbor-serde]
+open = []
+reviewed = [
+  "twittner/minicbor#76 Encoder::simple emits and Decoder::simple accepts ill-formed f8 00..1f: conformance (`wellformed`), not memory safety",
+  "twittner/minicbor#71 a max_depth for the derive: derived decoding recurses without a bound (a safe-Rust stack overflow; `depth` gates a crash)",
+]
+
+[minicbor]
+open = []
+reviewed = [
+  "twittner/minicbor#71 derived decoding has no depth limit: a safe-Rust stack overflow on hostile nesting, not unsound",
+  "twittner/minicbor#76 as for minicbor-serde",
+]
+
+[cbor4ii]
+open = []
+reviewed = [
+  "quininer/cbor4ii: seven open issues (#3, #5, #27, #28, #30, #33, #46), all feature requests or release tracking; none about memory safety",
+]
+
+[cbor2]
+open = []
+reviewed = [
+  "ldclabs/cbor2: no open issues on 2026-11-11",
+]
+
+[c2pa_cbor]
+open = []
+reviewed = [
+  "contentauth/c2pa-cbor#39 depth limits and full u64 support in Value conversion: a feature request; no memory safety issue is open",
+]

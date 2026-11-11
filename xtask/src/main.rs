@@ -1,0 +1,77 @@
+//! Every task this repository runs, behind `cargo xtask <task>`.
+//!
+//! Each task writes provenance-stamped JSON under `results/`; `report` is the
+//! only writer of `report/`, and it reads nothing but `results/`.
+
+mod build;
+mod container;
+mod cost;
+mod counted;
+mod differential;
+mod doctor;
+mod endtoend;
+mod footprint;
+mod fuzzing;
+mod matrix;
+mod provenance;
+mod report;
+mod timed;
+mod util;
+mod wire;
+
+use anyhow::Result;
+
+const HELP: &str = "\
+cargo xtask <task> [--sets a,b] [--variants v,w] [--workloads x,y] [--jobs N]
+
+  image         build the valgrind container image
+  doctor        verify every build compiled for its variant's target features
+  count         callgrind instructions and estimated cycles (container)
+                [--check [--tolerance PCT] [--record]]
+  alloc         allocations per operation
+  hw            hardware cycles and instructions at portable and native [--rounds 3] [--core 2] [--trust solo|canonical]
+  time          timed sampling [--rounds 3] [--core 2] [--trust solo|canonical]
+  e2e-count     callgrind per HTTP request, codec share (container)
+  e2e-time      loopback throughput and open-loop p99 [--reps 5] [--seconds 30] [--trust solo|canonical]
+  size          .text of a fixture per codec, minus the floor
+  wire          encoded size per entry and workload, raw, gzip and zstd
+  compile-time  clean and incremental build times [--reps 5]
+  msrv          does each backend build on Rust 1.85 (Kynos's MSRV)
+  footprint     crates added, their unsafe counts, RustSec advisories
+  conformance   the conformance suite, every set at every variant
+  fuzz          differential fuzzing [--seconds 1800]
+  miri          conformance subset under Miri
+  report        regenerate report/ from results/ [--check] [--allow-stale]
+";
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some((task, rest)) = args.split_first() else {
+        eprint!("{HELP}");
+        return Ok(());
+    };
+    provenance::begin();
+    match task.as_str() {
+        "image" => container::image(),
+        "doctor" => doctor::doctor(rest),
+        "count" => counted::count(rest),
+        "alloc" => counted::alloc(rest),
+        "hw" => timed::hw(rest),
+        "time" => timed::time(rest),
+        "e2e-count" => endtoend::count(rest),
+        "e2e-time" => endtoend::time(rest),
+        "size" => cost::size(rest),
+        "wire" => wire::wire(rest),
+        "compile-time" => cost::compile_time(rest),
+        "msrv" => cost::msrv(rest),
+        "footprint" => footprint::footprint(rest),
+        "conformance" => differential::conformance(rest),
+        "fuzz" => fuzzing::fuzz(rest),
+        "miri" => fuzzing::miri(rest),
+        "report" => report::report(rest),
+        _ => {
+            eprint!("{HELP}");
+            anyhow::bail!("unknown task {task}")
+        }
+    }
+}

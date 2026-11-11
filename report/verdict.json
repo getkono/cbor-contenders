@@ -1,0 +1,198 @@
+{
+  "admitted": false,
+  "entries": [
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "pending",
+          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "ciborium",
+      "entry": "ciborium"
+    },
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "pending",
+          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "minicbor-serde",
+      "entry": "minicbor-serde"
+    },
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "fail",
+          "why": "its wire form (a struct as an array) has no faithful JSON Schema (section 5)"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "minicbor",
+      "entry": "minicbor"
+    },
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "pending",
+          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "cbor4ii",
+      "entry": "cbor4ii"
+    },
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "pending",
+          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "cbor2",
+      "entry": "cbor2"
+    },
+    {
+      "admitted": false,
+      "clauses": [
+        {
+          "clause": 1,
+          "outcome": "fail",
+          "why": "kynos #998: no written use case an outside BodyCodec cannot serve"
+        },
+        {
+          "clause": 2,
+          "outcome": "pending",
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+        },
+        {
+          "clause": 3,
+          "outcome": "pending",
+          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+        },
+        {
+          "clause": 4,
+          "outcome": "pending",
+          "why": "no footprint"
+        },
+        {
+          "clause": 5,
+          "outcome": "pending",
+          "why": "no footprint"
+        }
+      ],
+      "crate": "c2pa_cbor",
+      "entry": "c2pa_cbor"
+    }
+  ],
+  "rule": "kynos #989 section 7"
+}
