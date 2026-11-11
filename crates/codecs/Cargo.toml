@@ -1,0 +1,37 @@
+[package]
+name = "codecs"
+description = "One adapter per CBOR backend and per baseline, each held to the same contract."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# One feature per candidate *crate*. A measurement build enables at most one,
+# so no candidate can change another's (or a baseline's) features through
+# unification. The baselines (serde_json, prost) and the oracle (serde_cbor)
+# are always present.
+[features]
+ciborium = ["dep:ciborium"]
+minicbor-serde = ["dep:minicbor-serde", "dep:minicbor"]
+# minicbor's own derive, a second set of body types: its own build, so the
+# serde adapter's minicbor features stay what they are.
+minicbor = ["dep:minicbor", "minicbor/derive"]
+cbor4ii = ["dep:cbor4ii"]
+cbor2 = ["dep:cbor2"]
+c2pa_cbor = ["dep:c2pa_cbor"]
+
+[dependencies]
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_cbor.workspace = true
+prost.workspace = true
+ciborium = { workspace = true, optional = true }
+minicbor = { workspace = true, optional = true }
+minicbor-serde = { workspace = true, optional = true }
+cbor4ii = { workspace = true, optional = true }
+cbor2 = { workspace = true, optional = true }
+c2pa_cbor = { workspace = true, optional = true }
+
+[lints]
+workspace = true
