@@ -117,6 +117,9 @@ pub struct Data {
     pub host: Host,
     pub callgrind: Table,
     pub recount: Value,
+    /// The SHA-256 of `results/callgrind/x86_64.json` as it stands, which a
+    /// recount must name; `None` when it could not be read.
+    pub counts_digest: Option<String>,
     pub e2e_count: Vec<Value>,
     pub footprint: Vec<Value>,
     pub advisory_db: Value,
@@ -278,6 +281,9 @@ impl Data {
         }
         data.callgrind = loader.table("callgrind/x86_64.json")?;
         data.recount = loader.doc("callgrind/recount.json")?.unwrap_or(Value::Null);
+        data.counts_digest = std::fs::read(results.join("callgrind/x86_64.json"))
+            .ok()
+            .map(|bytes| crate::counted::counts_digest(&bytes));
         data.e2e_count = loader.rows("callgrind/e2e-x86_64.json")?;
         let footprint = loader.doc("footprint.json")?.unwrap_or(Value::Null);
         data.footprint = footprint["rows"].as_array().cloned().unwrap_or_default();
@@ -351,6 +357,38 @@ type PerOperation<'a> = (
     &'a dyn Fn(&str, &str) -> Vec<crate::matrix::Shape>,
     bool,
 );
+
+/// A recount that does not vouch for every count committed now: one that
+/// compared fewer than the rows with a count (a rejected, unsupported or
+/// wrong cell has none, so it is neither committed nor compared), at a
+/// tolerance above zero, or of another counts file than this one.
+fn recount_gaps(data: &Data) -> Vec<String> {
+    let r = &data.recount;
+    if r.is_null() {
+        return Vec::new(); // missing or skipped: the loader said so
+    }
+    let mut gaps = Vec::new();
+    let counted = data.callgrind.rows.values().filter(|r| r["ir"].is_number()).count();
+    if r["tolerance"].as_f64() != Some(0.0)
+        || r["compared"].as_u64() != Some(counted as u64)
+        || r["committed"].as_u64() != Some(counted as u64)
+        || counted == 0
+    {
+        gaps.push(format!(
+            "callgrind/recount.json: {} of {} counts recounted at tolerance {}, against {counted} counts committed now; the check needs every one of them at 0",
+            r["compared"], r["committed"], r["tolerance"]
+        ));
+    }
+    match r["counts_sha256"].as_str() {
+        None => gaps.push("callgrind/recount.json: names no counts file (`counts_sha256`); rerun `mise run count:check`".into()),
+        Some(stamp) if Some(stamp) != data.counts_digest.as_deref() => gaps.push(format!(
+            "callgrind/recount.json: verified the counts file with SHA-256 {stamp}, but callgrind/x86_64.json now has {}; rerun `mise run count:check`",
+            data.counts_digest.as_deref().unwrap_or("no digest (it could not be read)")
+        )),
+        Some(_) => {}
+    }
+    gaps
+}
 
 /// What a complete `mise run all` would have written and did not.
 #[must_use]
@@ -432,19 +470,7 @@ pub fn incomplete(data: &Data) -> Vec<String> {
             }
         }
     }
-    if !data.callgrind.rows.is_empty() {
-        let committed = data.callgrind.rows.len() as u64;
-        if data.recount["compared"].as_u64() != Some(committed) || data.recount["tolerance"].as_f64() != Some(0.0) {
-            gaps.push(format!(
-                "callgrind/recount.json: the zero-tolerance recount did not compare every one of the {committed} counts"
-            ));
-        }
-        let counts = std::fs::read(root().join("results/callgrind/x86_64.json")).unwrap_or_default();
-        let digest = crate::counted::counts_digest(&counts);
-        if data.recount["counts_sha256"].as_str() != Some(digest.as_str()) {
-            gaps.push("callgrind/recount.json: recounted another counts file than the committed one".into());
-        }
-    }
+    gaps.extend(recount_gaps(data));
     if !data.host.doctor.is_null() && data.host.doctor["failures"].as_array().is_some_and(|f| !f.is_empty()) {
         gaps.push("doctor.json: doctor reported failures".into());
     }
@@ -517,4 +543,66 @@ pub fn incomplete(data: &Data) -> Vec<String> {
         }
     }
     gaps
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::{Data, Key, Table, recount_gaps};
+
+    /// Three counted rows and two that hold no count: a refusal and an
+    /// unsupported shape.
+    fn counts() -> Table {
+        let mut t = Table::default();
+        for (workload, row) in [
+            ("json-small", json!({ "verdict": "exact", "ir": 10.0 })),
+            ("echo-post", json!({ "verdict": "exact", "ir": 20.0 })),
+            ("json-large", json!({ "verdict": "inexact", "ir": 30.0 })),
+            ("nested-10000", json!({ "verdict": "rejected", "detail": "depth" })),
+            ("enums", json!({ "verdict": "unsupported" })),
+        ] {
+            t.rows
+                .insert(Key::new("portable", "serde_json", workload, "decode"), row);
+        }
+        t
+    }
+
+    fn data(recount: Value) -> Data {
+        Data {
+            callgrind: counts(),
+            recount,
+            counts_digest: Some("aaaa".into()),
+            ..Data::default()
+        }
+    }
+
+    /// Rejected and unsupported rows have no count, so a recount of every
+    /// count compared three, not five.
+    #[test]
+    fn a_recount_of_every_count_passes_beside_rows_without_one() {
+        let ok = json!({ "compared": 3, "committed": 3, "tolerance": 0.0, "counts_sha256": "aaaa" });
+        assert_eq!(recount_gaps(&data(ok)), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_recount_short_of_the_counts_or_above_zero_tolerance_is_a_gap() {
+        for bad in [
+            json!({ "compared": 2, "committed": 3, "tolerance": 0.0, "counts_sha256": "aaaa" }),
+            json!({ "compared": 5, "committed": 5, "tolerance": 0.0, "counts_sha256": "aaaa" }),
+            json!({ "compared": 3, "committed": 3, "tolerance": 0.005, "counts_sha256": "aaaa" }),
+        ] {
+            assert_eq!(recount_gaps(&data(bad.clone())).len(), 1, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_recount_of_another_counts_file_is_a_gap() {
+        let other = json!({ "compared": 3, "committed": 3, "tolerance": 0.0, "counts_sha256": "bbbb" });
+        let gaps = recount_gaps(&data(other));
+        assert!(gaps.len() == 1 && gaps[0].contains("now has aaaa"), "{gaps:?}");
+        let unstamped = json!({ "compared": 3, "committed": 3, "tolerance": 0.0 });
+        assert_eq!(recount_gaps(&data(unstamped)).len(), 1);
+        assert!(recount_gaps(&data(Value::Null)).is_empty());
+    }
 }
