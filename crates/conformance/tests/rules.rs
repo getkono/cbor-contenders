@@ -6,7 +6,7 @@ use bytes::Bytes;
 use codecs::backend::serde_cbor::SerdeCbor;
 use codecs::{Backend, Body, Class, Failure, Format, Trailing};
 use conformance::record::Section;
-use conformance::{attributes, depth, lengths, strings};
+use conformance::{attributes, depth, deterministic, lengths, strings};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -171,4 +171,27 @@ fn the_oracle_refuses_past_its_depth_on_every_shape() {
         }
     }
     assert_eq!(probes.len(), depth::jobs().len());
+}
+
+/// The oracle writes keys as given (no sorting), every workload the same
+/// way in two processes, and has no opt-in deterministic mode.
+#[test]
+fn the_oracle_is_stable_and_writes_keys_as_given() {
+    let exe = std::path::Path::new(env!("CARGO_BIN_EXE_conform"));
+    let section = deterministic::run::<SerdeCbor>(Some(exe));
+    assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+    let (record, _) = section.finish();
+    let data = &record["data"];
+    assert_eq!(data["opt_in_mode"]["library_has"], serde_json::Value::Null);
+    for what in ["BTreeMap<String, u8>", "struct"] {
+        let order = data["key_order"][what]["order"].as_str().unwrap_or_default();
+        assert!(order.starts_with("as given"), "{what}: {order}");
+    }
+    let across = data["across_processes"]["by_workload"].as_object().expect("digests");
+    assert!(across.len() > 30, "{across:?}");
+    for (name, stable) in across {
+        if name != deterministic::HASH_MAP {
+            assert_eq!(stable, &serde_json::json!(true), "{name}");
+        }
+    }
 }

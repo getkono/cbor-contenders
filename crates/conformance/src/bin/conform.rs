@@ -6,7 +6,7 @@
 //! finding in the report, not a lost report. A child the harness could not
 //! run or read is an `error` on that backend's entry instead, and `conform`
 //! exits non-zero. `conform depth-probe ...` is the depth section's child (see
-//! `conformance::depth`), and `conform encode-hashmap <backend>` the
+//! `conformance::depth`), and `conform encode-digests <backend>` the
 //! deterministic section's.
 //!
 //! The process runs under a counting allocator, which section `lengths`
@@ -171,10 +171,10 @@ fn main() -> ExitCode {
         None => full(),
         Some("suite") if args.len() == 2 => suite(&args[1]),
         Some("depth-probe") => ExitCode::from(conformance::depth::child(&args[1..])),
-        Some("encode-hashmap") => ExitCode::from(conformance::deterministic::child(&args[1..])),
+        Some("encode-digests") => ExitCode::from(conformance::deterministic::child(&args[1..])),
         _ => {
             eprintln!(
-                "usage: conform | conform suite <backend> | conform depth-probe <backend> <shape> <depth> <target> <stack_bytes> | conform encode-hashmap <backend>"
+                "usage: conform | conform suite <backend> | conform depth-probe <backend> <shape> <depth> <target> <stack_bytes> | conform encode-digests <backend>"
             );
             ExitCode::from(2)
         }
