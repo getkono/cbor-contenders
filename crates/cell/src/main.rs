@@ -31,7 +31,7 @@ use crate::job::{Form, Op, Spec};
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: cell <check|callgrind|alloc|hw|time> <backend> <decode|encode|encode-into> <workload> <owned|borrowed> <shared|unique> [iters]\n       cell doctor | cell list | cell dump <backend> <workload>"
+        "usage: cell <check|callgrind|alloc|hw|time> <backend> <decode|encode|encode-into|encode-writer> <workload> <owned|borrowed> <shared|unique> [iters]\n       cell doctor | cell list | cell dump <backend> <workload>"
     );
     ExitCode::from(2)
 }

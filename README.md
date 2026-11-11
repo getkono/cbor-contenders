@@ -72,7 +72,7 @@ Each was checked on 2026-11-10:
 The contract is what a server's typed body does (`crates/codecs`):
 
 - Decode `T` from the `Bytes` the server received, owned or borrowing from the body.
-- Encode `T` into a fresh `Vec`, into a reused buffer, or into the `std::io::Write` a framework hands a codec (Kynos's `BodyCodec::encode`).
+- Encode `T` into a fresh `Vec` (`encode`), into a reused buffer (`encode-into`), or into the `std::io::Write` a framework hands a codec (Kynos's `BodyCodec::encode`). The last is measured as Kynos does it (`encode-writer`), and it is the encode clause 2 reads: `Json<T>` and `Encoded<C, T>` call `to_writer` into Kynos's `BodyWriter` (a 1 KiB stack buffer, then a heap one of at least 2 KiB, then `finish()` into exact-length `Bytes`), copied from Kynos 0.5.0 into `crates/codecs`; `Protobuf<T>` calls prost's `encode_to_vec`, and a native entry's `encode-writer` is that. `to_vec` is measured beside it, for information.
 - Classify each failure. The line is RFC 8949's own: bytes that are not a valid CBOR item (ill-formed, section 5.1, or invalid, section 5.3) are the client's syntax, a 400. A valid item of the wrong shape for `T` is a 422.
 
 Each adapter maps its library's errors as faithfully as the error type allows, and says in a comment what it cannot distinguish. minicbor-serde's error hides its kind, so on the failure path only its adapter asks minicbor's own decoder whether the body is well-formed. Any copy a backend needs to meet the contract happens inside the adapter, so it is counted.
@@ -203,7 +203,7 @@ CBOR is admitted in-tree only if all five hold, per candidate (`xtask/src/report
 
 1. **A written use case an outside `BodyCodec` cannot serve.** Settled by kynos #998: there is none. The report states it and computes nothing.
 2. **The frontier.**
-   - **The win.** On at least one of axes 1 to 4, at a Kynos workload and the server's own shape (owned decode of a shared frame, `to_vec` encode), the candidate is more than the margin better than both serde_json and prost, at `portable`.
+   - **The win.** On at least one of axes 1 to 4, at a Kynos workload and the server's own shape (owned decode of a shared frame; the encode Kynos does, `encode-writer`: `to_writer` into its `BodyWriter`, or `encode_to_vec` for prost), the candidate is more than the margin better than both serde_json and prost, at `portable`.
    - **The margin.** It is ε = 5 %, or on a cycles axis the A/A band at that cell where wider.
    - **Counts must agree.** A cycles advantage counts only where callgrind's estimated cycles at the same build point the same way.
 3. **No silent conformance difference.** The suite's gate at every variant, and no wrong answer in any measured cell or end-to-end route. There must also be no fuzz divergence and no undefined behaviour under Miri. The worked codec's profile must hold on every `model` case. minicbor's derive fails here by construction: it has no faithful schema.

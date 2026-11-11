@@ -135,7 +135,8 @@ pub fn variant(name: &str) -> anyhow::Result<Variant> {
 /// An operation cell's shape, as `cell` takes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shape {
-    /// `decode`, `encode`, `encode-into`.
+    /// `decode`, `encode` (`to_vec`), `encode-into` (a reused buffer), or
+    /// `encode-writer` (the body Kynos writes, [`SERVER_ENCODE`]).
     pub op: &'static str,
     /// `owned`, `borrowed`.
     pub form: &'static str,
@@ -175,11 +176,26 @@ pub const SHAPES: &[Shape] = &[
         form: "owned",
         arrival: "shared",
     },
+    SERVER_ENCODE_SHAPE,
 ];
 
+/// The encode a Kynos server does, which clause 2 reads: `Json<T>` and
+/// `Encoded<C, T>` serialize through `to_writer` into Kynos's `BodyWriter`
+/// (a 1 KiB stack buffer, then a heap one, then exact-length `Bytes`), and
+/// `Protobuf<T>` through prost's `encode_to_vec`. `encode` (`to_vec`) is
+/// measured beside it, for information.
+pub const SERVER_ENCODE: &str = "encode-writer";
+
+const SERVER_ENCODE_SHAPE: Shape = Shape {
+    op: SERVER_ENCODE,
+    form: "owned",
+    arrival: "shared",
+};
+
 /// The shapes the timed and end-to-end protocols run: the decode a server
-/// does (owned, one shared frame) and the encode it does (`to_vec`).
-pub const TIMED_SHAPES: &[Shape] = &[SHAPES[0], SHAPES[4]];
+/// does (owned, one shared frame) and the encode it does
+/// ([`SERVER_ENCODE`]).
+pub const TIMED_SHAPES: &[Shape] = &[SHAPES[0], SERVER_ENCODE_SHAPE];
 
 /// The workloads the decision rule is evaluated on.
 pub const KYNOS: &[&str] = &["json-small", "echo-post", "json-large"];

@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 
 use bytes::Bytes;
 use codecs::body::Arrival;
-use codecs::{Backend, Body, Native};
+use codecs::{Backend, Body, Failure, Native};
 use payloads::{Expect, Workload};
 use serde_json::{Value, json};
 
@@ -21,6 +21,12 @@ pub enum Op {
     Encode,
     /// `T` into a reused, pre-sized `Vec` (`to_writer`).
     EncodeInto,
+    /// `T` the way Kynos writes a response body: a serde backend's
+    /// `to_writer` into a fresh copy of Kynos 0.5.0's `BodyWriter`, then
+    /// `finish()` into `Bytes`; a native one through the server's own encode
+    /// (`encode_to_vec` for prost, as `Protobuf<T>` does). The server's own
+    /// encode, which clause 2 reads.
+    EncodeWriter,
 }
 
 impl Op {
@@ -29,6 +35,7 @@ impl Op {
             "decode" => Some(Self::Decode),
             "encode" => Some(Self::Encode),
             "encode-into" => Some(Self::EncodeInto),
+            "encode-writer" => Some(Self::EncodeWriter),
             _ => None,
         }
     }
@@ -125,14 +132,15 @@ impl<B: Backend> payloads::Visit for ByWorkload<B> {
         let mut output = match (spec.op, spec.form) {
             (Op::Decode, Form::Owned) => modes::run(&spec, &mut DecodeOwned::<B, W>::new(spec.arrival)),
             (Op::Decode, Form::Borrowed) => modes::run(&spec, &mut DecodeBorrowed::<B, W>::new(spec.arrival)),
-            (Op::Encode | Op::EncodeInto, _) if !B::ENCODES => json!({ "verdict": "unsupported" }),
+            (Op::Encode | Op::EncodeInto | Op::EncodeWriter, _) if !B::ENCODES => json!({ "verdict": "unsupported" }),
             // A body that must be refused encodes no value: nothing to encode.
-            (Op::Encode | Op::EncodeInto, _) if W::EXPECT != Expect::Value => json!({
+            (Op::Encode | Op::EncodeInto | Op::EncodeWriter, _) if W::EXPECT != Expect::Value => json!({
                 "verdict": "unsupported",
                 "detail": "decode-only workload: its bytes must be refused",
             }),
-            (Op::Encode, _) => modes::run(&spec, &mut Encode::<B, W>::new(false)),
-            (Op::EncodeInto, _) => modes::run(&spec, &mut Encode::<B, W>::new(true)),
+            (Op::Encode, _) => modes::run(&spec, &mut Encode::<B, W>::new(Sink::Fresh)),
+            (Op::EncodeInto, _) => modes::run(&spec, &mut Encode::<B, W>::new(Sink::Reused)),
+            (Op::EncodeWriter, _) => modes::run(&spec, &mut Encode::<B, W>::new(Sink::Server)),
         };
         if let (Value::Object(out), Value::Object(head)) = (&mut output, header) {
             out.extend(head);
@@ -190,12 +198,13 @@ impl<N: Native> payloads::Visit for NativeByWorkload<N> {
                 "detail": "no borrowed form",
             }),
             (Op::Decode, Form::Owned) => modes::run(&spec, &mut NativeDecode::<N, W>::new(spec.arrival)),
-            (Op::Encode | Op::EncodeInto, _) if W::EXPECT != Expect::Value => json!({
+            (Op::Encode | Op::EncodeInto | Op::EncodeWriter, _) if W::EXPECT != Expect::Value => json!({
                 "verdict": "unsupported",
                 "detail": "decode-only workload: its bytes must be refused",
             }),
-            (Op::Encode, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(false)),
-            (Op::EncodeInto, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(true)),
+            (Op::Encode, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(Sink::Fresh)),
+            (Op::EncodeInto, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(Sink::Reused)),
+            (Op::EncodeWriter, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(Sink::Server)),
         };
         if let (Value::Object(out), Value::Object(head)) = (&mut output, header) {
             out.extend(head);
@@ -357,9 +366,21 @@ impl<B: Backend, W: Workload> Job for DecodeBorrowed<B, W> {
     }
 }
 
+/// Where an encode writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sink {
+    /// A fresh `Vec` (`to_vec`).
+    Fresh,
+    /// A reused, pre-sized `Vec`.
+    Reused,
+    /// The server's own body: Kynos's `BodyWriter` for serde, the native
+    /// format's server encode otherwise.
+    Server,
+}
+
 struct Encode<B, W: Workload> {
     value: W::Owned,
-    into: bool,
+    into: Sink,
     out: Vec<u8>,
     /// The reference encoding of the value in `B`'s format.
     reference: Vec<u8>,
@@ -367,7 +388,7 @@ struct Encode<B, W: Workload> {
 }
 
 impl<B: Backend, W: Workload> Encode<B, W> {
-    fn new(into: bool) -> Self {
+    fn new(into: Sink) -> Self {
         let value = W::value();
         Self {
             reference: payloads::encode(B::FORMAT, &value),
@@ -377,29 +398,46 @@ impl<B: Backend, W: Workload> Encode<B, W> {
             _p: PhantomData,
         }
     }
+
+    /// One encode, as Kynos writes a body: `to_writer` into a fresh
+    /// `BodyWriter`, then its `finish()`. The `Bytes` is dropped by the
+    /// caller, inside the measured region, as every other shape's output is.
+    fn to_body(value: &W::Owned) -> Result<Bytes, Failure> {
+        let mut writer = codecs::writer::BodyWriter::new();
+        B::to_writer(value, &mut writer)?;
+        Ok(writer.finish())
+    }
 }
 
 impl<B: Backend, W: Workload> Job for Encode<B, W> {
     fn prepare(&mut self, _: u64) {
-        if self.into && self.out.capacity() < self.reference.len() {
+        if self.into == Sink::Reused && self.out.capacity() < self.reference.len() {
             self.out.reserve(self.reference.len() * 2);
         }
     }
 
     fn run(&mut self) {
-        if self.into {
-            let _ = black_box(B::encode_into(black_box(&self.value), &mut self.out));
-        } else {
-            let _ = black_box(B::encode(black_box(&self.value)));
+        match self.into {
+            Sink::Fresh => {
+                let _ = black_box(B::encode(black_box(&self.value)));
+            }
+            Sink::Reused => {
+                let _ = black_box(B::encode_into(black_box(&self.value), &mut self.out));
+            }
+            Sink::Server => {
+                let _ = black_box(Self::to_body(black_box(&self.value)));
+            }
         }
     }
 
     fn verify(&mut self) -> Verdict {
-        let encoded = if self.into {
-            self.prepare(1);
-            B::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
-        } else {
-            B::encode(&self.value)
+        let encoded = match self.into {
+            Sink::Fresh => B::encode(&self.value),
+            Sink::Reused => {
+                self.prepare(1);
+                B::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
+            }
+            Sink::Server => Self::to_body(&self.value).map(|b| b.to_vec()),
         };
         match encoded {
             Ok(bytes) => judge_encoding::<W>(B::FORMAT, &bytes, &self.reference),
@@ -451,14 +489,14 @@ impl<N: Native, W: Workload> Job for NativeDecode<N, W> {
 
 struct NativeEncode<N, W: Workload> {
     value: W::Native,
-    into: bool,
+    into: Sink,
     out: Vec<u8>,
     reference: Vec<u8>,
     _p: PhantomData<N>,
 }
 
 impl<N: Native, W: Workload> NativeEncode<N, W> {
-    fn new(into: bool) -> Self {
+    fn new(into: Sink) -> Self {
         let value = W::native().unwrap_or_else(|| unreachable!("checked by the caller"));
         Self {
             reference: payloads::encode_native(N::FORMAT, &value),
@@ -472,25 +510,33 @@ impl<N: Native, W: Workload> NativeEncode<N, W> {
 
 impl<N: Native, W: Workload> Job for NativeEncode<N, W> {
     fn prepare(&mut self, _: u64) {
-        if self.into && self.out.capacity() < self.reference.len() {
+        if self.into == Sink::Reused && self.out.capacity() < self.reference.len() {
             self.out.reserve(self.reference.len() * 2);
         }
     }
 
     fn run(&mut self) {
-        if self.into {
-            let _ = black_box(N::encode_into(black_box(&self.value), &mut self.out));
-        } else {
-            let _ = black_box(N::encode(black_box(&self.value)));
+        match self.into {
+            Sink::Fresh => {
+                let _ = black_box(N::encode(black_box(&self.value)));
+            }
+            Sink::Reused => {
+                let _ = black_box(N::encode_into(black_box(&self.value), &mut self.out));
+            }
+            Sink::Server => {
+                let _ = black_box(N::encode_server(black_box(&self.value)));
+            }
         }
     }
 
     fn verify(&mut self) -> Verdict {
-        let encoded = if self.into {
-            self.prepare(1);
-            N::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
-        } else {
-            N::encode(&self.value)
+        let encoded = match self.into {
+            Sink::Fresh => N::encode(&self.value),
+            Sink::Reused => {
+                self.prepare(1);
+                N::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
+            }
+            Sink::Server => N::encode_server(&self.value),
         };
         match encoded {
             Ok(bytes) => judge_encoding::<W>(N::FORMAT, &bytes, &self.reference),
@@ -599,7 +645,7 @@ mod tests {
 
     #[test]
     fn a_body_that_must_be_refused_has_no_encode() {
-        for op in [Op::Encode, Op::EncodeInto] {
+        for op in [Op::Encode, Op::EncodeInto, Op::EncodeWriter] {
             for workload in [RejectTruncated::NAME, RejectShape::NAME] {
                 let out = cell::<SerdeJson>("check", op, Form::Owned, workload);
                 assert_eq!(out["verdict"], "unsupported", "{workload} {op:?}: {out}");
@@ -626,13 +672,23 @@ mod tests {
             .visit::<Prost>()
             .unwrap_or_else(|| panic!("no workload {workload}"))
         };
-        for op in [Op::Decode, Op::Encode, Op::EncodeInto] {
+        for op in [Op::Decode, Op::Encode, Op::EncodeInto, Op::EncodeWriter] {
             let out = native(op, "json-large");
             assert_eq!(out["verdict"], "exact", "{op:?}: {out}");
         }
         assert_eq!(native(Op::Decode, RejectTruncated::NAME)["verdict"], "exact");
         assert_eq!(native(Op::Decode, "enums")["verdict"], "unsupported");
         assert_eq!(dump("prost", "json-small").map(|b| b.map(|b| b.len())), Some(Ok(48)));
+    }
+
+    /// Kynos's body writer writes what `to_vec` writes, and is measured.
+    #[test]
+    fn the_server_encode_writes_the_reference_bytes() {
+        for mode in ["check", "callgrind", "alloc"] {
+            let out = cell::<SerdeJson>(mode, Op::EncodeWriter, Form::Owned, "json-large");
+            assert_eq!(out["verdict"], "exact", "{mode}: {out}");
+            assert_eq!(out["iters"], 2, "{mode}: {out}");
+        }
     }
 
     /// The encode is judged against the value's own encoding, which writes

@@ -201,7 +201,7 @@ fn a_copy_of_the_body_is_one_more_allocation_of_its_size() {
 #[test]
 fn an_adapter_that_does_less_is_refused_not_measured() {
     for mode in ["check", "callgrind", "alloc", "hw", "time"] {
-        for op in [Op::Decode, Op::Encode, Op::EncodeInto] {
+        for op in [Op::Decode, Op::Encode, Op::EncodeInto, Op::EncodeWriter] {
             let out = cell::<DoesLess>(mode, op, "json-large", None);
             assert_eq!(out["verdict"], "wrong", "{mode} {op:?}: {out}");
             assert!(out.get("iters").is_none(), "{mode} {op:?} was measured: {out}");

@@ -156,7 +156,9 @@ fn kynos_section(data: &Data, out: &mut String) {
         "kynos",
         "Clause 2: axes 1–4 at the Kynos shapes",
         "Hardware `cycles:u` (median of rounds) and callgrind estimated cycles for the owned decode \
-         of one shared frame and the `to_vec` encode, heap bytes per operation, and encoded bytes. \
+         of one shared frame and the encode Kynos does (`encode-writer`: `to_writer` into its \
+         `BodyWriter`, or prost's `encode_to_vec`), heap blocks and bytes per operation, and encoded \
+         bytes raw, gzip and zstd. \
          Ratios are against serde_json and prost; the A/A band is the widest gap between each \
          baseline and its copy.",
     );
@@ -207,16 +209,17 @@ fn per_workload_section(data: &Data, out: &mut String) {
         "workloads",
         "Every workload: estimated cycles",
         "callgrind estimated cycles (`Ir + 5·L1 misses + 35·LL misses`, fixed cache geometry) per \
-         operation at `portable`, owned decode of a shared frame and `to_vec` encode, as a multiple \
+         operation at `portable`, owned decode of a shared frame and the encode Kynos does \
+         (`encode-writer`), as a multiple \
          of serde_json's. Deterministic; the per-cell hardware cycles and every other shape are in \
          `data/hw.csv` and `data/callgrind.csv`. A dash is a cell not measured: a workload the \
          native formats do not carry, or a decode the entry refused (its verdict is in the CSV).",
     );
-    for op in ["decode", "encode"] {
+    for op in ["decode", crate::matrix::SERVER_ENCODE] {
         let _ = writeln!(out, "### {op}\n");
         let mut rows = Vec::new();
         for workload in payloads::ALL {
-            if op == "encode" && crate::matrix::DECODE_ONLY.contains(workload) {
+            if op != "decode" && crate::matrix::DECODE_ONLY.contains(workload) {
                 continue;
             }
             let base = data
@@ -249,7 +252,8 @@ fn heap_section(data: &Data, out: &mut String) {
         "heap",
         "Heap per operation",
         "Allocations and bytes per operation from the counting allocator, at `portable`, owned \
-         decode of a shared frame and `to_vec` encode; every shape is in `data/alloc.csv`.",
+         decode of a shared frame and the encode Kynos does (`encode-writer`); every shape, \
+         `to_vec` included, is in `data/alloc.csv`.",
     );
     let mut rows = Vec::new();
     for workload in KYNOS
@@ -264,8 +268,8 @@ fn heap_section(data: &Data, out: &mut String) {
                 code(entry),
                 cell("decode", "allocations"),
                 cell("decode", "bytes"),
-                cell("encode", "allocations"),
-                cell("encode", "bytes"),
+                cell(crate::matrix::SERVER_ENCODE, "allocations"),
+                cell(crate::matrix::SERVER_ENCODE, "bytes"),
             ]);
         }
     }

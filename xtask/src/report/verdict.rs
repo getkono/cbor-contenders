@@ -9,7 +9,8 @@
 //!    size) a candidate is on the frontier against serde_json and prost at
 //!    the portable build: more than the margin better than both, on a Kynos
 //!    workload, at the server's own shape (owned decode of a shared frame,
-//!    `to_vec` encode). The margin is ε = 5 %, or on a cycles axis the A/A
+//!    the encode Kynos does: `to_writer` into its `BodyWriter` for a serde
+//!    entry, `encode_to_vec` for prost). The margin is ε = 5 %, or on a cycles axis the A/A
 //!    band at that cell when wider; a cycles advantage counts only where
 //!    callgrind's estimated cycles at the same build point the same way.
 //!    (aarch64, which #989 also names, is not measured; see the README.)
@@ -28,7 +29,7 @@
 use serde_json::{Value, json};
 
 use super::data::{Data, Key};
-use crate::matrix::{DECIDING_VARIANT, KYNOS, SETS};
+use crate::matrix::{DECIDING_VARIANT, KYNOS, SERVER_ENCODE, SETS};
 
 /// The ε of ε-dominance.
 pub const EPSILON: f64 = 0.05;
@@ -101,7 +102,7 @@ pub const AXES: &[Axis] = &[
     },
     Axis {
         name: "encode cycles",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "cycles",
     },
     Axis {
@@ -116,27 +117,27 @@ pub const AXES: &[Axis] = &[
     },
     Axis {
         name: "encode heap blocks",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "allocations",
     },
     Axis {
         name: "encode heap bytes",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "bytes",
     },
     Axis {
         name: "encoded size",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "raw",
     },
     Axis {
         name: "encoded size gzip",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "gzip",
     },
     Axis {
         name: "encoded size zstd",
-        op: "encode",
+        op: SERVER_ENCODE,
         field: "zstd",
     },
 ];
@@ -975,7 +976,7 @@ mod tests {
             ("ciborium", 80.0, 120.0, 50.0),
         ] {
             for workload in KYNOS {
-                for op in ["decode", "encode"] {
+                for op in ["decode", SERVER_ENCODE] {
                     let key = Key::new(DECIDING_VARIANT, entry, workload, op);
                     hw.rows.insert(key.clone(), json!({ "cycles": cycles, "rounds": [] }));
                     cg.rows.insert(key.clone(), json!({ "est_cycles": est }));
@@ -1016,7 +1017,7 @@ mod tests {
             ("ciborium", ciborium),
         ] {
             for workload in KYNOS {
-                for op in ["decode", "encode"] {
+                for op in ["decode", SERVER_ENCODE] {
                     let key = Key::new(DECIDING_VARIANT, entry, workload, op);
                     hw.rows
                         .insert(key.clone(), json!({ "cycles": cycles, "rounds": [], "trust": trust }));
@@ -1093,7 +1094,7 @@ mod tests {
         let mut alloc = Table::default();
         for (entry, blocks) in [("serde_json", 10.0), ("prost", 10.0), ("ciborium", 5.0)] {
             for workload in KYNOS {
-                for op in ["decode", "encode"] {
+                for op in ["decode", SERVER_ENCODE] {
                     alloc.rows.insert(
                         Key::new(DECIDING_VARIANT, entry, workload, op),
                         json!({ "allocations": blocks, "bytes": 100.0 }),

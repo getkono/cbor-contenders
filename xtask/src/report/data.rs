@@ -39,8 +39,9 @@ impl Key {
         }
     }
 
-    /// The server's own shape of `op` (owned decode of a shared frame, or
-    /// `to_vec` encode).
+    /// `op` of a shared frame, owned: for `decode` and for the server's own
+    /// encode ([`crate::matrix::SERVER_ENCODE`]) the shape a Kynos server
+    /// runs.
     pub fn new(variant: &str, backend: &str, workload: &str, op: &str) -> Self {
         Self {
             variant: variant.into(),
