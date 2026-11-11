@@ -1,5 +1,8 @@
 //! One pass over a CBOR body: well-formed, valid, and inside the JSON data
-//! model, or the first reason it is not.
+//! model, or the reason it is not. Not being CBOR (400) outranks being CBOR
+//! outside the data model (422): a refusal of the second kind is held while
+//! the walk finishes, so it is answered only for a body that is CBOR
+//! throughout.
 //!
 //! Iterative, with an explicit stack bounded by [`MAX_DEPTH`], so no input
 //! can overflow the thread's stack; a declared length is checked against the
@@ -122,7 +125,9 @@ impl std::error::Error for Refusal {}
 /// Check `body` against the rules (crate docs), in one pass.
 ///
 /// # Errors
-/// The first rule the body breaks, in input order.
+/// The first rule the body breaks that makes it not CBOR (400), wherever it
+/// is; failing that, the first data-model rule (422) it breaks, in input
+/// order.
 pub fn scan(body: &[u8]) -> Result<(), Refusal> {
     Walker::new(body, Mode::Profile).run()
 }
@@ -178,6 +183,10 @@ struct Walker<'a> {
     stack: Vec<Frame>,
     /// Keys of every open map, innermost last.
     keys: Vec<Cow<'a, [u8]>>,
+    /// The first data-model refusal (422), held while the walk goes on: a
+    /// body that is not CBOR anywhere is a 400 whatever it holds before
+    /// the bytes that make it so.
+    pending: Option<Refusal>,
 }
 
 /// One decoded head.
@@ -196,6 +205,16 @@ impl<'a> Walker<'a> {
             mode,
             stack: Vec::new(),
             keys: Vec::new(),
+            pending: None,
+        }
+    }
+
+    /// Hold `rule`, a data-model refusal, unless an earlier one is held.
+    #[cold]
+    fn data(&mut self, rule: Rule, offset: usize) {
+        debug_assert!(!rule.is_syntax());
+        if self.pending.is_none() {
+            self.pending = Some(Refusal { rule, offset });
         }
     }
 
@@ -248,7 +267,7 @@ impl<'a> Walker<'a> {
             if let Some(Frame::Chunks { major }) = self.stack.last().copied() {
                 if is_break {
                     self.stack.pop();
-                    if self.item_done(head.offset)? {
+                    if self.item_done(head.offset) {
                         return self.finish();
                     }
                     continue;
@@ -271,9 +290,9 @@ impl<'a> Walker<'a> {
                         }
                         self.stack.pop();
                         if let Some(start) = map {
-                            self.close_map(start, head.offset)?;
+                            self.close_map(start, head.offset);
                         }
-                        if self.item_done(head.offset)? {
+                        if self.item_done(head.offset) {
                             return self.finish();
                         }
                         continue;
@@ -282,7 +301,7 @@ impl<'a> Walker<'a> {
                 }
             }
             if is_key && self.mode == Mode::Profile && head.major != 3 {
-                return refuse(Rule::NonTextKey, head.offset);
+                self.data(Rule::NonTextKey, head.offset);
             }
             if head.info == 31 {
                 if self.mode == Mode::Preferred {
@@ -291,14 +310,14 @@ impl<'a> Walker<'a> {
                 match head.major {
                     2 | 3 => {
                         if head.major == 2 && self.mode == Mode::Profile {
-                            return refuse(Rule::ByteString, head.offset);
+                            self.data(Rule::ByteString, head.offset);
                         }
                         if is_key && head.major == 3 {
                             // An indefinite key is compared by its
                             // concatenation, which needs a copy.
                             let key = self.indefinite_key(head.offset)?;
                             self.keys.push(Cow::Owned(key));
-                            if self.item_done(head.offset)? {
+                            if self.item_done(head.offset) {
                                 return self.finish();
                             }
                         } else {
@@ -323,7 +342,7 @@ impl<'a> Walker<'a> {
                 0 | 1 => {}
                 2 => {
                     if self.mode == Mode::Profile {
-                        return refuse(Rule::ByteString, head.offset);
+                        self.data(Rule::ByteString, head.offset);
                     }
                     self.take(head.arg, head.offset)?;
                 }
@@ -351,7 +370,7 @@ impl<'a> Walker<'a> {
                     let map = (head.major == 5).then_some(self.keys.len());
                     if items == Some(0) {
                         if let Some(start) = map {
-                            self.close_map(start, head.offset)?;
+                            self.close_map(start, head.offset);
                         }
                     } else {
                         self.open(
@@ -366,14 +385,14 @@ impl<'a> Walker<'a> {
                 }
                 6 => {
                     if self.mode == Mode::Profile {
-                        return refuse(Rule::Tag, head.offset);
+                        self.data(Rule::Tag, head.offset);
                     }
                     // A tag is followed by its content, which is the item.
                     continue;
                 }
                 _ => self.simple_or_float(&head)?,
             }
-            if self.item_done(head.offset)? {
+            if self.item_done(head.offset) {
                 return self.finish();
             }
         }
@@ -382,7 +401,10 @@ impl<'a> Walker<'a> {
     fn simple_or_float(&mut self, head: &Head) -> Result<(), Refusal> {
         match head.info {
             24 if head.arg < 32 => refuse(Rule::SimpleTooShort, head.offset),
-            0..=19 | 23 | 24 if self.mode == Mode::Profile => refuse(Rule::Simple, head.offset),
+            0..=19 | 23 | 24 if self.mode == Mode::Profile => {
+                self.data(Rule::Simple, head.offset);
+                Ok(())
+            }
             0..=24 => Ok(()),
             25..=27 => {
                 let value = match head.info {
@@ -391,7 +413,7 @@ impl<'a> Walker<'a> {
                     _ => f64::from_bits(head.arg),
                 };
                 if self.mode == Mode::Profile && !value.is_finite() {
-                    return refuse(Rule::NonFinite, head.offset);
+                    self.data(Rule::NonFinite, head.offset);
                 }
                 if self.mode == Mode::Preferred && !shortest_float(head.info, head.arg) {
                     return refuse(Rule::NotPreferred, head.offset);
@@ -427,24 +449,24 @@ impl<'a> Walker<'a> {
 
     /// An item finished: count it against its container, closing every
     /// container it completes. True when the top-level item is done.
-    fn item_done(&mut self, offset: usize) -> Result<bool, Refusal> {
+    fn item_done(&mut self, offset: usize) -> bool {
         loop {
             match self.stack.last_mut() {
-                None => return Ok(true),
+                None => return true,
                 Some(Frame::Indefinite { items, .. }) => {
                     *items += 1;
-                    return Ok(false);
+                    return false;
                 }
-                Some(Frame::Chunks { .. }) => return Ok(false),
+                Some(Frame::Chunks { .. }) => return false,
                 Some(Frame::Definite { left, map }) => {
                     *left -= 1;
                     if *left > 0 {
-                        return Ok(false);
+                        return false;
                     }
                     let map = *map;
                     self.stack.pop();
                     if let Some(start) = map {
-                        self.close_map(start, offset)?;
+                        self.close_map(start, offset);
                     }
                 }
             }
@@ -452,16 +474,15 @@ impl<'a> Walker<'a> {
     }
 
     /// Refuse a map whose keys (`keys[start..]`) repeat, then forget them.
-    fn close_map(&mut self, start: usize, offset: usize) -> Result<(), Refusal> {
+    fn close_map(&mut self, start: usize, offset: usize) {
         if self.mode == Mode::Profile {
             let keys = &mut self.keys[start..];
             keys.sort_unstable();
             if keys.windows(2).any(|pair| pair[0] == pair[1]) {
-                return refuse(Rule::DuplicateKey, offset);
+                self.data(Rule::DuplicateKey, offset);
             }
         }
         self.keys.truncate(start);
-        Ok(())
     }
 
     /// Read an indefinite-length text key's chunks into one key.
@@ -482,12 +503,14 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// The walk reached the end of the top-level item: bytes after it are
+    /// not CBOR; otherwise the body is refused for the first data-model rule
+    /// it broke, if any.
     fn finish(&self) -> Result<(), Refusal> {
-        if self.at == self.body.len() {
-            Ok(())
-        } else {
-            refuse(Rule::Trailing, self.at)
+        if self.at != self.body.len() {
+            return refuse(Rule::Trailing, self.at);
         }
+        self.pending.map_or(Ok(()), Err)
     }
 }
 

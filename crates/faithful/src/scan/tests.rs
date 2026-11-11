@@ -92,6 +92,31 @@ fn values_without_a_json_equivalent_are_422() {
 }
 
 #[test]
+fn ill_formed_input_is_400_after_a_data_model_refusal() {
+    for (bytes, rule) in [
+        // A non-text key, then an indefinite integer.
+        ("a1 1f 00", Rule::IndefiniteArgument),
+        // A non-text key, then a simple value below 32 in two bytes.
+        ("a1 f8 10 00", Rule::SimpleTooShort),
+        // A byte string, then a reserved head.
+        ("82 40 1c", Rule::Reserved),
+        // A tag, then a truncated item; a NaN, then trailing bytes.
+        ("82 c1 00 19 01", Rule::Truncated),
+        ("f9 7e00 00", Rule::Trailing),
+        // A repeated key, then invalid text.
+        ("83 a2 61 61 01 61 61 02 61 ff 00", Rule::InvalidUtf8),
+    ] {
+        let refusal = scan(&hex(bytes)).expect_err(bytes);
+        assert_eq!(refusal.rule, rule, "{bytes}");
+        assert_eq!(refusal.status(), 400, "{bytes}");
+    }
+    // A body that is CBOR throughout keeps its first data-model refusal.
+    assert_eq!(refused("82 40 00"), Rule::ByteString);
+    assert_eq!(refused("82 40 c1 00"), Rule::ByteString);
+    assert_eq!(scan(&hex("82 01 40")).expect_err("bytes").offset, 2);
+}
+
+#[test]
 fn transparent_encodings_are_accepted() {
     for bytes in [
         // Indefinite text, array and map.
