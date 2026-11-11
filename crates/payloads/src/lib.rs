@@ -112,6 +112,8 @@ pub enum Group {
     Family,
     /// Schema-equivalents of widely used real-world documents.
     World,
+    /// Bodies a server must refuse ([`Expect::Reject`]).
+    Rejection,
 }
 
 /// A native value for a workload the native formats cannot carry: it has no

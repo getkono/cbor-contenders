@@ -381,6 +381,23 @@ fn cbor_corpora_are_preferred_serialization() {
     }
 }
 
+/// A workload reports under `Rejection` exactly when its bytes must be
+/// refused.
+#[test]
+fn rejections_are_their_own_group() {
+    struct Grouped;
+    impl Visit for Grouped {
+        type Output = (Group, Expect);
+        fn visit<W: Workload>(self) -> (Group, Expect) {
+            (W::GROUP, W::EXPECT)
+        }
+    }
+    for name in ALL {
+        let (group, expect) = dispatch(name, Grouped).expect("dispatches");
+        assert_eq!(group == Group::Rejection, expect != Expect::Value, "{name}");
+    }
+}
+
 #[test]
 fn dispatch_refuses_unknown_names() {
     assert_eq!(dispatch("no-such-workload", Facts(Format::Json)), None);
