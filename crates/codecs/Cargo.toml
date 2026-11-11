@@ -33,5 +33,8 @@ cbor4ii = { workspace = true, optional = true }
 cbor2 = { workspace = true, optional = true }
 c2pa_cbor = { workspace = true, optional = true }
 
+[dev-dependencies]
+alloc-count.workspace = true
+
 [lints]
 workspace = true

@@ -29,4 +29,8 @@ impl Native for Prost {
         out.clear();
         value.proto_encode(out)
     }
+
+    fn encode_server<T: NativeType>(value: &T) -> Result<Vec<u8>, Failure> {
+        value.proto_to_vec()
+    }
 }

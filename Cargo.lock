@@ -222,6 +222,7 @@ dependencies = [
 name = "codecs"
 version = "0.0.0"
 dependencies = [
+ "alloc-count",
  "bytes",
  "c2pa_cbor",
  "cbor2",
