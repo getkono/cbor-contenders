@@ -5,8 +5,6 @@
 //! types also derive `prost::Message` (the `Protobuf<T>` baseline) and, in the
 //! `minicbor` set, minicbor's `Encode`/`Decode`, with tags in field order.
 
-use std::borrow::Cow;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{Group, Workload};
@@ -46,10 +44,10 @@ pub struct ItemRef<'a> {
     pub id: u64,
     /// Display name.
     #[serde(borrow)]
-    pub name: Cow<'a, str>,
+    pub name: &'a str,
     /// Labels.
     #[serde(borrow)]
-    pub tags: Vec<Cow<'a, str>>,
+    pub tags: Vec<&'a str>,
     /// Liveness.
     pub active: bool,
     /// A two-decimal weight.
@@ -111,7 +109,7 @@ pub struct EchoRef<'a> {
     pub id: u64,
     /// The bulk of the body.
     #[serde(borrow)]
-    pub payload: Cow<'a, str>,
+    pub payload: &'a str,
     /// Checksum of the payload bytes.
     pub checksum: u64,
 }

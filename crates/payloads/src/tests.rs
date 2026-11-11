@@ -1,9 +1,9 @@
-use std::borrow::Cow;
-
 use codecs::Format;
 use sha2::{Digest, Sha256};
 
 use super::*;
+
+mod borrows;
 
 fn sha(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -239,10 +239,11 @@ fn cbor_writes_bytes_as_byte_strings_and_json_as_base64() {
         blob[&serde_cbor::Value::Text("data".into())],
         serde_cbor::Value::Bytes(first.data.clone())
     );
-    // The borrowed form borrows the bytes from a CBOR body.
+    // The borrowed form reads the bytes from a CBOR body (`borrows` checks
+    // they are a slice of it).
     let bytes = blob::ByteStrings::bytes(Format::Cbor);
     let borrowed: blob::BlobsRef<'_> = serde_cbor::from_slice(&bytes).expect("borrowed");
-    assert!(matches!(borrowed.blobs[0].data, Cow::Borrowed(_)));
+    assert_eq!(borrowed.blobs[0].data, first.data);
 }
 
 #[test]
