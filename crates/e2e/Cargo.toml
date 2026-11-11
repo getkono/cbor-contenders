@@ -1,0 +1,37 @@
+[package]
+name = "e2e"
+description = "Whole HTTP requests through a Kynos server, to size the codec's share of one."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Forwarded to `codecs` and the worked codec, as `cell` does. A measurement
+# build enables at most one.
+[features]
+ciborium = ["codecs/ciborium", "kynos-cbor/ciborium"]
+minicbor-serde = ["codecs/minicbor-serde", "kynos-cbor/minicbor-serde"]
+cbor4ii = ["codecs/cbor4ii", "kynos-cbor/cbor4ii"]
+cbor2 = ["codecs/cbor2", "kynos-cbor/cbor2"]
+c2pa_cbor = ["codecs/c2pa_cbor", "kynos-cbor/c2pa_cbor"]
+
+[dependencies]
+bytes.workspace = true
+codecs.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+kynos.workspace = true
+kynos-cbor.workspace = true
+payloads.workspace = true
+prost.workspace = true
+prost-derive = "=0.14.4"
+serde.workspace = true
+serde_cbor.workspace = true
+serde_json.workspace = true
+# `signal` for SIGTERM in `e2e-server`.
+tokio = { workspace = true, features = ["signal"] }
+
+[lints]
+workspace = true

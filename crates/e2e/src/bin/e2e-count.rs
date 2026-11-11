@@ -1,0 +1,139 @@
+//! `e2e-count <entry> <route> [requests]`
+//!
+//! Runs `requests` (default 1000) sequential requests through one keep-alive
+//! connection to an in-process Kynos server, on one thread, with no network:
+//! the client and server connections talk over a `tokio::io::duplex` pipe on
+//! a current-thread runtime (see `e2e::loopback`). The route is first
+//! verified (its body read back to the workload's value) and warmed with one
+//! request, so lazy statics and buffer growth stay outside the count.
+//!
+//! Only [`e2e_measured`] is counted: callgrind runs this binary with
+//! `--collect-atstart=no --toggle-collect=*e2e_measured*`. Prints one JSON
+//! object; exit 1 when it cannot serve at all, 2 on a wrong response to the
+//! verified request or to any counted one (the object says `"verdict":
+//! "wrong"`) or on usage (it prints nothing), 3 on an unknown entry.
+
+use std::hint::black_box;
+use std::process::ExitCode;
+
+use bytes::Bytes;
+use e2e::Route;
+use e2e::loopback::{Loopback, body_for, verify};
+use serde_json::json;
+use tokio::runtime::Runtime;
+
+fn usage() -> ExitCode {
+    eprintln!("usage: e2e-count <entry> <echo-post|json-large-get|json-large-post|json-small-get> [requests]");
+    ExitCode::from(2)
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let [backend, route, rest @ ..] = args.as_slice() else {
+        return usage();
+    };
+    let Some(route) = Route::parse(route) else {
+        return usage();
+    };
+    let requests = match rest.first().map(|n| n.parse::<u64>()) {
+        None => 1000,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return usage(),
+    };
+    let (Some(format), Some(service)) = (e2e::entry::format(backend), e2e::entry::service(backend)) else {
+        eprintln!(
+            "entry {backend} is not compiled into this build: {:?}",
+            e2e::entry::compiled()
+        );
+        return ExitCode::from(3);
+    };
+    let service = match service {
+        Ok(service) => service,
+        Err(error) => {
+            eprintln!("router: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let body = body_for(format, route);
+    // A wrong answer is the backend's, and a result: reported as such, not
+    // as a failure of the run.
+    let verified = match runtime.block_on(verify(backend, route)) {
+        Ok(verified) => verified,
+        Err(error) => {
+            println!(
+                "{}",
+                json!({ "backend": backend, "route": route.name(), "ok": false, "error": error })
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(detail) = verified {
+        println!(
+            "{}",
+            json!({ "backend": backend, "route": route.name(), "verdict": "wrong", "detail": detail })
+        );
+        return ExitCode::from(2);
+    }
+    let outcome = runtime.block_on(async {
+        let mut loopback = Loopback::connect(format, service).await.map_err(Stop::Serve)?;
+        exchange(&mut loopback, route, &body).await?;
+        Ok::<_, Stop>(loopback)
+    });
+    let outcome = outcome.and_then(|mut loopback| e2e_measured(&runtime, &mut loopback, route, &body, requests));
+    let mut out = json!({ "backend": backend, "route": route.name(), "requests": requests, "ok": outcome.is_ok() });
+    match &outcome {
+        Ok(()) => {}
+        Err(Stop::Serve(error)) => out["error"] = json!(error),
+        Err(Stop::Wrong(detail)) => {
+            out["verdict"] = json!("wrong");
+            out["detail"] = json!(detail);
+        }
+    }
+    println!("{out}");
+    match outcome {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(Stop::Serve(_)) => ExitCode::FAILURE,
+        Err(Stop::Wrong(_)) => ExitCode::from(2),
+    }
+}
+
+/// Why a counted run stopped: it could not serve at all, or the backend
+/// answered a request wrongly (a result).
+enum Stop {
+    Serve(String),
+    Wrong(String),
+}
+
+/// One request, its failure sorted by whose it is.
+async fn exchange(loopback: &mut Loopback, route: Route, body: &Bytes) -> Result<(), Stop> {
+    loopback
+        .exchange(route, body)
+        .await
+        .map_err(Stop::Serve)?
+        .map_err(Stop::Wrong)
+}
+
+/// The measured region, synchronous so callgrind's toggle covers every poll
+/// of both connections until the last response is collected.
+#[inline(never)]
+fn e2e_measured(
+    runtime: &Runtime,
+    loopback: &mut Loopback,
+    route: Route,
+    body: &Bytes,
+    requests: u64,
+) -> Result<(), Stop> {
+    runtime.block_on(async {
+        for _ in 0..black_box(requests) {
+            exchange(loopback, route, body).await?;
+        }
+        Ok(())
+    })
+}
