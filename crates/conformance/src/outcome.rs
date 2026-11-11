@@ -256,6 +256,20 @@ impl Target for AsValue {
     }
 }
 
+/// `serde_cbor::Value`, through `deserialize_any`: a tree that holds every
+/// CBOR value (any key, bytes, tags as the library reports them), so a
+/// well-formed body is never refused for its shape. Rendered as its debug
+/// text: a JSON value cannot hold every one.
+#[derive(Debug)]
+pub struct AnyCbor;
+
+impl Target for AnyCbor {
+    type Out<'de> = serde_cbor::Value;
+    fn view(out: &serde_cbor::Value) -> Value {
+        Value::String(format!("{out:?}"))
+    }
+}
+
 /// `serde::de::IgnoredAny`: validation only.
 #[derive(Debug)]
 pub struct Ignored;
