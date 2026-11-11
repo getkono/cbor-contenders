@@ -32,6 +32,8 @@ pub enum Rule {
     BadChunk,
     /// A two-byte simple value below 32. 400.
     SimpleTooShort,
+    /// A tag followed by a break, where its content belongs. 400.
+    TagWithoutContent,
     /// Bytes after the item. 400.
     Trailing,
     /// A text string that is not UTF-8. 400.
@@ -67,6 +69,7 @@ impl Rule {
                 | Self::IndefiniteArgument
                 | Self::BadChunk
                 | Self::SimpleTooShort
+                | Self::TagWithoutContent
                 | Self::Trailing
                 | Self::InvalidUtf8
                 | Self::TooDeep
@@ -83,6 +86,7 @@ impl Rule {
             Self::IndefiniteArgument => "an integer or tag is given an indefinite length",
             Self::BadChunk => "an indefinite-length string holds a chunk of another type",
             Self::SimpleTooShort => "a two-byte simple value is below 32",
+            Self::TagWithoutContent => "a CBOR tag has no content",
             Self::Trailing => "bytes follow the CBOR item",
             Self::InvalidUtf8 => "a CBOR text string is not UTF-8",
             Self::TooDeep => "the body is nested too deeply",
@@ -187,6 +191,8 @@ struct Walker<'a> {
     /// body that is not CBOR anywhere is a 400 whatever it holds before
     /// the bytes that make it so.
     pending: Option<Refusal>,
+    /// The last head was a tag, so this one is its content.
+    tagged: bool,
 }
 
 /// One decoded head.
@@ -206,6 +212,7 @@ impl<'a> Walker<'a> {
             stack: Vec::new(),
             keys: Vec::new(),
             pending: None,
+            tagged: false,
         }
     }
 
@@ -264,6 +271,11 @@ impl<'a> Walker<'a> {
             let head = self.head()?;
             let is_key = self.expecting_key();
             let is_break = head.major == 7 && head.info == 31;
+            // A tag's content is an item; a break is not one (RFC 8949
+            // §3.4: a tag is followed by a single data item).
+            if std::mem::take(&mut self.tagged) && is_break {
+                return refuse(Rule::TagWithoutContent, head.offset);
+            }
             if let Some(Frame::Chunks { major }) = self.stack.last().copied() {
                 if is_break {
                     self.stack.pop();
@@ -388,6 +400,7 @@ impl<'a> Walker<'a> {
                         self.data(Rule::Tag, head.offset);
                     }
                     // A tag is followed by its content, which is the item.
+                    self.tagged = true;
                     continue;
                 }
                 _ => self.simple_or_float(&head)?,

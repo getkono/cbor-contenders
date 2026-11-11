@@ -39,6 +39,12 @@ fn ill_formed_input_is_400() {
         ("61 ff", Rule::InvalidUtf8),
         ("7f 61 c3 61 a9 ff", Rule::InvalidUtf8),
         ("bf 61 61 ff", Rule::StrayBreak),
+        ("9f c0 ff", Rule::TagWithoutContent),
+        ("bf c0 ff", Rule::TagWithoutContent),
+        ("bf 61 61 c0 ff", Rule::TagWithoutContent),
+        ("82 c0 ff", Rule::TagWithoutContent),
+        ("c0", Rule::Truncated),
+        ("82 00 c0", Rule::Truncated),
     ] {
         let rule_got = refused(bytes);
         assert_eq!(rule_got, rule, "{bytes}");
@@ -215,4 +221,11 @@ fn well_formed_accepts_what_the_profile_refuses_but_not_ill_formed_input() {
     for bytes in ["", "1c", "ff", "7f 01 ff", "f8 18", "01 01", "61 ff", "5f 61 00 ff"] {
         assert!(well_formed(&hex(bytes)).is_err(), "{bytes}");
     }
+    // A tag needs its content in every mode.
+    for bytes in ["9f c0 ff", "bf c0 ff", "c0", "9f d9 d9f7 ff"] {
+        assert!(well_formed(&hex(bytes)).is_err(), "{bytes}");
+        assert!(!preferred(&hex(bytes)), "{bytes}");
+    }
+    assert_eq!(well_formed(&hex("9f c0 00 ff")), Ok(()));
+    assert_eq!(well_formed(&hex("9f c0 c1 00 ff")), Ok(()));
 }
