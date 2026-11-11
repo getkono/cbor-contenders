@@ -66,6 +66,12 @@ fn alloc(job: &mut impl Job, iters: u64) -> Value {
     }
     job.prepare(1);
     job.run();
+    // What stays live is weighed with no prepared input held, before and
+    // after: a unique arrival's pool is freed input by input inside the
+    // measured region, so live bytes taken with the pool held would hide as
+    // much leaked as the pool held.
+    job.release();
+    let resting = alloc_count::Snapshot::now().live;
     job.prepare(iters);
     let before = alloc_count::Snapshot::now();
     alloc_count::reset_peak();
@@ -75,13 +81,15 @@ fn alloc(job: &mut impl Job, iters: u64) -> Value {
     // too, and a peak read inside it counted its map (671 bytes for the
     // first entries) whenever that exceeded the operation's own peak.
     let peak = alloc_count::peak();
+    job.release();
+    let rested = alloc_count::Snapshot::now().live;
     let per = |a: u64, b: u64| (b - a) as f64 / iters as f64;
     json!({
         "allocations": per(before.allocations, after.allocations),
         "reallocations": per(before.reallocations, after.reallocations),
         "bytes": per(before.bytes, after.bytes),
         "peak_bytes": peak.saturating_sub(before.live),
-        "leaked_bytes": after.live.saturating_sub(before.live),
+        "leaked_bytes": rested.saturating_sub(resting),
     })
 }
 
@@ -239,4 +247,55 @@ fn time(job: &mut impl Job) -> Value {
         "pinned": pinned,
         "isolation": crate::doctor::Interference::method(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hint::black_box;
+
+    use super::alloc;
+    use crate::job::Job;
+    use crate::verify::Verdict;
+
+    /// A unique arrival's shape: a pool of inputs, each freed by the
+    /// operation that takes it. This one also leaks a copy of each.
+    struct LeaksOnePerInput {
+        pool: Vec<Vec<u8>>,
+        leak: bool,
+    }
+
+    impl Job for LeaksOnePerInput {
+        fn prepare(&mut self, n: u64) {
+            self.pool.clear();
+            self.pool.extend((0..n).map(|_| vec![7u8; 4096]));
+        }
+        fn run(&mut self) {
+            let input = self.pool.pop().unwrap_or_default();
+            if self.leak {
+                std::mem::forget(black_box(input.clone()));
+            }
+            drop(black_box(input));
+        }
+        fn release(&mut self) {
+            self.pool = Vec::new();
+        }
+        fn verify(&mut self) -> Verdict {
+            Verdict::Exact
+        }
+        fn size(&self) -> usize {
+            4096
+        }
+    }
+
+    /// Live bytes taken with the pool held saw the pool's frees cancel the
+    /// leak; weighed at rest, the leak shows.
+    #[test]
+    fn a_leak_beside_a_freed_pool_is_counted() {
+        if !cfg!(feature = "count-alloc") {
+            return;
+        }
+        let leaked = |leak| alloc(&mut LeaksOnePerInput { pool: Vec::new(), leak }, 8)["leaked_bytes"].as_f64();
+        assert_eq!(leaked(false), Some(0.0));
+        assert!(leaked(true).is_some_and(|b| b >= 8.0 * 4096.0), "{:?}", leaked(true));
+    }
 }

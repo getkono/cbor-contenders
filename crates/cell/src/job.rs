@@ -78,6 +78,9 @@ pub trait Job {
     /// measured, including dropping whatever it produced: the value, or for
     /// a workload whose bytes must be refused, the error.
     fn run(&mut self);
+    /// Free whatever [`Self::prepare`] holds that the operations did not
+    /// take, so live heap can be weighed at rest. Never measured.
+    fn release(&mut self) {}
     /// Run once and check the result.
     fn verify(&mut self) -> Verdict;
     /// Input or output size, in bytes.
@@ -280,6 +283,10 @@ impl Inputs {
         }
     }
 
+    fn release(&mut self) {
+        self.pool = Vec::new();
+    }
+
     fn next(&mut self) -> Bytes {
         match self.arrival {
             Arrival::Shared => self.template.clone(),
@@ -311,6 +318,10 @@ impl<B: Backend, W: Workload> DecodeOwned<B, W> {
 impl<B: Backend, W: Workload> Job for DecodeOwned<B, W> {
     fn prepare(&mut self, n: u64) {
         self.inputs.prepare(n);
+    }
+
+    fn release(&mut self) {
+        self.inputs.release();
     }
 
     fn run(&mut self) {
@@ -348,6 +359,10 @@ impl<B: Backend, W: Workload> DecodeBorrowed<B, W> {
 impl<B: Backend, W: Workload> Job for DecodeBorrowed<B, W> {
     fn prepare(&mut self, n: u64) {
         self.inputs.prepare(n);
+    }
+
+    fn release(&mut self) {
+        self.inputs.release();
     }
 
     fn run(&mut self) {
@@ -470,6 +485,10 @@ impl<N: Native, W: Workload> NativeDecode<N, W> {
 impl<N: Native, W: Workload> Job for NativeDecode<N, W> {
     fn prepare(&mut self, n: u64) {
         self.inputs.prepare(n);
+    }
+
+    fn release(&mut self) {
+        self.inputs.release();
     }
 
     fn run(&mut self) {
