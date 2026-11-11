@@ -196,6 +196,45 @@ fn sweep_bodies_are_exactly_their_size_in_cbor() {
     }
 }
 
+/// The construction is exact for any target, not only the eight the sweep
+/// names, and pads by less than one record: every size from the floor to
+/// 2 KiB, every power of two to 1 MiB and its neighbours, and the sizes
+/// either side of each step a head widens at.
+#[test]
+fn sweep_construction_is_exact_for_any_size_and_pads_less_than_a_record() {
+    let floor = crate::cbor(&vec![kynos::Item {
+        name: String::new(),
+        tags: Vec::new(),
+        ..kynos::item(0)
+    }])
+    .len();
+    let largest = (0..20_000)
+        .map(|i| crate::cbor(&kynos::item(i)).len())
+        .max()
+        .unwrap_or(0);
+    let mut sizes: Vec<usize> = (floor..=2048).collect();
+    for shift in 6..=20 {
+        let power = 1usize << shift;
+        sizes.extend([power - 1, power, power + 1, power + 3]);
+    }
+    for edge in [24 * 75, 256 * 75, 65_536 * 75 / 8] {
+        sizes.extend(edge - 200..edge + 200);
+    }
+    sizes.extend([
+        65_535 + floor,
+        65_536 + floor,
+        65_537 + floor,
+        65_538 + floor,
+        65_539 + floor,
+    ]);
+    for size in sizes {
+        let items = sweep::records(size);
+        assert_eq!(crate::cbor(&items).len(), size, "{size}");
+        let padding = items[0].name.len() + items[0].tags.iter().map(String::len).sum::<usize>();
+        assert!(padding < largest, "{size}: {padding} bytes of padding");
+    }
+}
+
 /// Each written-by-hand nested body is what the serializers write for the
 /// value, on a stack deep enough for serde's recursion.
 fn check_nested<const D: u32>() {
