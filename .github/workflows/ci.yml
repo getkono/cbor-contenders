@@ -58,11 +58,13 @@ jobs:
   reproduce:
     name: Counts reproduce
     runs-on: ubuntu-24.04
-    # Only once counts are committed: before the first measurement there is
-    # nothing to reproduce.
-    if: hashFiles('results/callgrind/x86_64.json') != ''
     steps:
       - uses: actions/checkout@v4
+      # Only once counts are committed: before the first measurement there is
+      # nothing to reproduce. `hashFiles` needs the checkout, so the gate is
+      # on each step (a job-level `if` cannot call it).
       - uses: jdx/mise-action@v2
+        if: hashFiles('results/callgrind/x86_64.json') != ''
       - name: Recount the Kynos shapes and compare with the committed counts
+        if: hashFiles('results/callgrind/x86_64.json') != ''
         run: cargo xtask count --check --workloads json-small,echo-post,json-large --variants portable --jobs 4
