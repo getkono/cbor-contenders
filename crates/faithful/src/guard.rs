@@ -164,8 +164,15 @@ impl<S: Serializer> Serializer for Guard<S> {
         self.0.serialize_struct_variant(name, index, variant, len).map(Each)
     }
 
+    /// Human-readable, whatever the format underneath says. Kynos's schema
+    /// describes the human-readable form of the types whose serde impls
+    /// switch on this: `Uuid` (`format: uuid`), `IpAddr`, `Ipv4Addr` and
+    /// `Ipv6Addr` (`ipv4`, `ipv6`), and chrono's, jiff's, `rust_decimal`'s and
+    /// `bigdecimal`'s where they do, each a formatted string. Written as the
+    /// format would write them bare, a `Uuid` would be 16 bytes and an
+    /// address an array of octets, neither of which the schema describes.
     fn is_human_readable(&self) -> bool {
-        self.0.is_human_readable()
+        true
     }
 }
 
@@ -364,7 +371,9 @@ impl<E: ser::Error> Serializer for KeyProbe<E> {
         Err(E::custom(KEY))
     }
 
+    /// As the guard's own: a key type that switches on this (an `IpAddr`,
+    /// a `Uuid`) is probed in the string form the guard then writes.
     fn is_human_readable(&self) -> bool {
-        false
+        true
     }
 }

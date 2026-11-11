@@ -70,3 +70,30 @@ fn string_like_keys_are_accepted() {
     assert!(encode(&BTreeMap::from([(Name("x".into()), 1u8)])).is_ok());
     assert!(encode(&BTreeMap::from([('c', 1u8)])).is_ok());
 }
+
+#[test]
+fn types_with_a_human_readable_form_are_written_in_it() {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    // serde_cbor says it is not human-readable, so bare it writes an address
+    // as its octets; through the guard, as the text its schema describes.
+    let v4 = Ipv4Addr::new(192, 0, 2, 1);
+    assert_ne!(
+        serde_cbor::to_vec(&v4).expect("bare"),
+        serde_cbor::to_vec(&"192.0.2.1").expect("text")
+    );
+    assert_eq!(
+        encode(&v4).expect("faithful"),
+        serde_cbor::to_vec(&"192.0.2.1").expect("text")
+    );
+    let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
+    assert_eq!(
+        encode(&v6).expect("faithful"),
+        serde_cbor::to_vec(&"::1").expect("text")
+    );
+    // As a map key, too: the probe sees the string the guard writes.
+    let keyed = BTreeMap::from([(v4, 1u8)]);
+    assert_eq!(
+        encode(&keyed).expect("faithful"),
+        serde_cbor::to_vec(&BTreeMap::from([("192.0.2.1", 1u8)])).expect("text")
+    );
+}
