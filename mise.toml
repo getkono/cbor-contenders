@@ -1,0 +1,182 @@
+# mise is the task interface. The Rust toolchain is pinned in
+# rust-toolchain.toml as well, which rustup resolves from any directory.
+
+[tools]
+rust = { version = "1.97.1", profile = "minimal", components = ["clippy", "rustfmt", "llvm-tools-preview"] }
+hk = "1.53.0"
+"github:nextest-rs/nextest" = "cargo-nextest-0.9.140"
+"github:convco/convco" = "0.7.0"
+# The load generator for end-to-end timing, pinned: a generator that upgrades
+# itself under a parser changes what a percentile means.
+"github:hatoo/oha" = "1.16.0"
+# Fuzzing and Miri only; built from source.
+"cargo:cargo-fuzz" = "0.13.2"
+
+[hooks]
+postinstall = 'test -n "$CI" || hk install --mise'
+
+[env]
+# A compiler cache would make compile-time measure the cache.
+RUSTC_WRAPPER = ""
+
+[tasks.format]
+description = "Format the workspace"
+run = "cargo fmt --all && cargo fmt --manifest-path fuzz/Cargo.toml"
+
+[tasks."format:check"]
+description = "Check formatting"
+run = "cargo fmt --all -- --check && cargo fmt --manifest-path fuzz/Cargo.toml -- --check"
+
+[tasks.lint]
+description = "Clippy, warnings denied, once per set (each enables one candidate crate) and for the fuzz crate"
+run = """
+set -e
+for f in "" ciborium minicbor-serde minicbor cbor4ii cbor2 c2pa_cbor; do
+  echo "clippy: features=[$f]"
+  cargo clippy --workspace --all-targets --locked --features "$f" -- -D warnings
+done
+for f in ciborium minicbor-serde cbor4ii cbor2 c2pa_cbor; do
+  echo "fuzz check: features=[$f]"
+  cargo check --manifest-path fuzz/Cargo.toml --locked --features "$f"
+done
+"""
+
+[tasks.test]
+description = "Unit and integration tests, once per set (the candidates' features exclude each other only by convention, but each set's suites are run as that set builds)"
+run = """
+set -e
+for f in "" ciborium minicbor-serde minicbor cbor4ii cbor2 c2pa_cbor; do
+  echo "test: features=[$f]"
+  cargo nextest run --workspace --locked --no-tests=pass --features "${f:+$f,}cell/count-alloc"
+done
+"""
+
+[tasks.image]
+description = "Build the valgrind container image"
+run = "cargo xtask image"
+
+[tasks.doctor]
+description = "Verify every build compiles and runs its claimed SIMD paths on this host"
+run = "cargo xtask doctor"
+
+[tasks.conformance]
+description = "Conformance of every CBOR candidate, every build variant"
+run = "cargo xtask conformance"
+
+[tasks."conformance:quick"]
+description = "Conformance at the portable variant only"
+run = "cargo xtask conformance --variants portable"
+
+[tasks.count]
+description = "callgrind counts (in the container)"
+run = "cargo xtask count"
+
+[tasks."count:check"]
+description = "Recount every committed count from an empty target/ at zero tolerance, and record that it reproduced"
+run = "rm -rf target/matrix/container target/callgrind && cargo xtask count --check --tolerance 0 --record"
+
+[tasks.sensitivity]
+description = "The harness-can-fail checks under callgrind, in the container"
+run = """
+cargo xtask image
+podman run --rm --security-opt label=disable -v "$PWD:/work" -v "${CARGO_HOME:-$HOME/.cargo}/registry:/usr/local/cargo/registry" cbor-contenders:valgrind cargo test -p cell --locked --features count-alloc -- --ignored sensitivity
+"""
+
+[tasks.alloc]
+description = "Allocations per operation"
+run = "cargo xtask alloc"
+
+[tasks.hw]
+description = "Hardware cycles at portable and native, pinned, in shuffled rounds with an A/A control; pass --trust canonical only on a quieted machine"
+run = "cargo xtask hw"
+
+[tasks.time]
+description = "Timed sampling; pass --trust canonical only on a quieted machine"
+run = "cargo xtask time"
+
+[tasks."e2e:count"]
+description = "Per-request callgrind counts and codec share (in the container)"
+run = "cargo xtask e2e-count"
+
+[tasks."e2e:time"]
+description = "Loopback throughput and open-loop p99"
+run = "cargo xtask e2e-time"
+
+[tasks.size]
+description = "Binary .text cost per codec"
+run = "cargo xtask size"
+
+[tasks.wire]
+description = "Encoded size per entry and workload, raw, gzip and zstd"
+run = "cargo xtask wire"
+
+[tasks.compile-time]
+description = "Clean and incremental compile times"
+run = "cargo xtask compile-time"
+
+[tasks.msrv]
+description = "Build each backend on Rust 1.85, Kynos's MSRV"
+run = "cargo xtask msrv"
+
+[tasks.footprint]
+description = "Crates added, unsafe counts, advisories"
+run = "cargo xtask footprint"
+
+[tasks.fuzz]
+description = "Differential fuzzing (nightly), 30 minutes per target and candidate"
+run = "cargo xtask fuzz"
+
+[tasks.miri]
+description = "Conformance subset under Miri (nightly)"
+run = "cargo xtask miri"
+
+[tasks.report]
+description = "Regenerate report/ from results/"
+run = "cargo xtask report"
+
+[tasks."report:check"]
+description = "Fail if report/ is not what results/ generates, or a README claim does not match it"
+run = "cargo xtask report --check"
+
+[tasks.check]
+description = "Everything a change must pass before handoff"
+depends = ["format:check", "lint", "test", "report:check"]
+
+[tasks.toolchains]
+description = "Install the extra toolchains: Rust 1.85.0 for msrv, the pinned nightly for fuzz and miri"
+run = """
+rustup toolchain install 1.85.0 --profile minimal
+rustup toolchain install nightly-2026-09-25 --profile minimal --component miri,rust-src,llvm-tools-preview
+"""
+
+[tasks.all]
+# Every result file the report reads, in one run on one commit: the report
+# refuses results measured on other code, so a partial rerun after a change
+# to measured code is caught rather than mixed in. Set CC_TRUST=canonical
+# on a quieted host; the timed tasks refuse it on a busy one. It needs a
+# clean checkout (results measured from a dirty one are drafts) and podman
+# (or docker) for the valgrind container.
+description = "Every measurement and verification, then the report (x86-64 Linux; hours)"
+run = """
+set -e
+mise run toolchains
+mise run test
+mise run sensitivity
+cargo xtask doctor
+cargo xtask conformance
+cargo xtask alloc
+cargo xtask size
+cargo xtask wire
+cargo xtask msrv
+cargo xtask compile-time
+cargo xtask count
+mise run count:check
+cargo xtask e2e-count
+cargo xtask footprint
+cargo xtask miri
+cargo xtask fuzz
+cargo xtask hw
+cargo xtask time
+cargo xtask e2e-time
+cargo xtask report
+"""

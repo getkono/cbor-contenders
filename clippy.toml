@@ -1,0 +1,2 @@
+# Crate names appear in prose throughout; they are identifiers, not typos.
+doc-valid-idents = ["..", "serde_json", "serde_cbor", "serde_bytes", "c2pa_cbor", "cbor4ii", "minicbor", "ciborium", "prost", "SIMD", "DHAT", "RustSec", "OpenAPI", "CBOR", "UTF-8"]

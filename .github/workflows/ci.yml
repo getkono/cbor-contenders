@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  NEXTEST_PROFILE: ci
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  commits:
+    name: Commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: "github:convco/convco"
+      - run: convco check ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+  check:
+    name: Check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run format:check
+      - run: mise run lint
+      - run: mise run test
+      - run: mise run report:check
+
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      # Findings are the product, so this job fails only when the suite
+      # itself cannot run; the gate outcomes are in the uploaded reports.
+      - run: cargo xtask conformance --variants portable
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conformance
+          path: results/*/conformance/
+
+  reproduce:
+    name: Counts reproduce
+    runs-on: ubuntu-24.04
+    # Only once counts are committed: before the first measurement there is
+    # nothing to reproduce.
+    if: hashFiles('results/callgrind/x86_64.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+      - name: Recount the Kynos shapes and compare with the committed counts
+        run: cargo xtask count --check --workloads json-small,echo-post,json-large --variants portable --jobs 4

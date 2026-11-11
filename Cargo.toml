@@ -1,0 +1,98 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/getkono/cbor-contenders"
+publish = false
+
+# Every candidate is pinned exactly. A result is a claim about a version, and a
+# range would let `cargo update` change what the claim is about.
+[workspace.dependencies]
+payloads = { path = "crates/payloads" }
+codecs = { path = "crates/codecs" }
+faithful = { path = "crates/faithful" }
+kynos-cbor = { path = "crates/kynos-cbor" }
+alloc-count = { path = "crates/alloc-count" }
+
+serde = { version = "=1.0.228", features = ["derive", "rc"] }
+serde_bytes = "=0.11.19"
+# The two in-tree baselines: what `Json<T>` and `Protobuf<T>` use. prost is
+# pinned to the version Kynos's own lockfile resolves, not the newest.
+serde_json = "=1.0.154"
+prost = { version = "=0.14.4", default-features = false, features = ["std", "derive"] }
+# The candidates.
+ciborium = { version = "=0.2.2", default-features = false, features = ["std"] }
+minicbor = { version = "=2.3.1", default-features = false, features = ["std", "half"] }
+minicbor-serde = { version = "=0.7.2", default-features = false, features = ["std", "half"] }
+cbor4ii = { version = "=1.2.4", default-features = false, features = ["serde1", "use_std", "half-f16"] }
+cbor2 = { version = "=1.1.6", default-features = false, features = ["std"] }
+c2pa_cbor = { version = "=0.78.2", default-features = false }
+# The decode oracle and corpus encoder. Never measured: unmaintained
+# (RUSTSEC-2021-0127), and kept only because it is the one decoder none of the
+# candidates share code with.
+serde_cbor = { version = "=0.11.2", default-features = false, features = ["std"] }
+# The framework the worked codec and the end-to-end server mount on, from
+# crates.io so the resolved version is provenance a reader can check.
+kynos = { version = "=0.5.0", default-features = false, features = ["openapi31", "macros", "server", "http1", "json", "protobuf"] }
+
+bytes = "1.12"
+sha2 = "0.10"
+hex = "0.4"
+anyhow = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros", "time"] }
+hyper = { version = "1", features = ["http1", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+http = "1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+naive_bytecount = "allow"
+# Generated fixtures mirror real schemas and hash constants.
+struct_excessive_bools = "allow"
+similar_names = "allow"
+unreadable_literal = "allow"
+format_push_string = "allow"
+cast_possible_wrap = "allow"
+
+# The profile Kynos ships. Line tables only: they change no code generation and
+# let callgrind resolve the symbol its collection is toggled on.
+#
+# Every stable setting is spelled out, defaults included: `xtask` passes this
+# table to each measured build as `--config`, which is what outranks a setting
+# in a user's `~/.cargo/config.toml`, so a key left out here could be set there.
+# `build.incremental` outranks `incremental` below, so `xtask` pins it as well.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+debug = "line-tables-only"
+strip = "none"
+split-debuginfo = "off"
+debug-assertions = false
+overflow-checks = false
+incremental = false
+rpath = false
+
+# Tests only: the conformance harness decodes a million floats per backend,
+# which takes minutes unoptimized. The dev profile, whose build time is a
+# measurement, is left alone.
+[profile.test]
+opt-level = 2
