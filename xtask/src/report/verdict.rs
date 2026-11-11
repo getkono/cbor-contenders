@@ -191,47 +191,89 @@ pub fn aa_band(data: &Data, axis: &Axis, baseline: &str, workload: &str) -> Opti
     Some(band)
 }
 
-/// Clause 2 for `entry`.
+/// Whether `entry` beats both baselines on `axis` at `workload` by more
+/// than the margin (ε, or with `band` the A/A band where wider), a cycles
+/// win corroborated by callgrind; `Err` names a figure that is missing.
+fn beats_both(data: &Data, axis: &Axis, entry: &str, workload: &str, band: bool) -> Result<bool, String> {
+    let mine = figure(data, axis, entry, workload).ok_or_else(|| format!("{} at {workload}", axis.name))?;
+    let mut beats = true;
+    for baseline in ["serde_json", "prost"] {
+        let (Some(theirs), Some(aa)) = (
+            figure(data, axis, baseline, workload),
+            aa_band(data, axis, baseline, workload),
+        ) else {
+            return Err(format!("{} at {workload} ({baseline})", axis.name));
+        };
+        let margin = if band { EPSILON.max(aa) } else { EPSILON };
+        let better = mine < theirs * (1.0 - margin);
+        let agrees = axis.field != "cycles"
+            || matches!(
+                (counted(data, axis, entry, workload), counted(data, axis, baseline, workload)),
+                (Some(m), Some(t)) if m < t
+            );
+        beats &= better && agrees;
+    }
+    Ok(beats)
+}
+
+/// The trust class of the hardware cycles a win on `axis` at `workload`
+/// rests on: `canonical` only if the entry's, both baselines' and their A/A
+/// copies' rows all are. Every other axis is deterministic and settled.
+pub fn win_trust(data: &Data, axis: &Axis, entry: &str, workload: &str) -> &'static str {
+    if axis.field != "cycles" {
+        return "canonical";
+    }
+    let canonical = [entry, "serde_json", "serde_json#aa", "prost", "prost#aa"]
+        .iter()
+        .all(|b| {
+            data.host
+                .hw
+                .row(&Key::new(DECIDING_VARIANT, b, workload, axis.op))
+                .is_some_and(|r| r["trust"] == "canonical")
+        });
+    if canonical { "canonical" } else { "solo" }
+}
+
+/// Clause 2 for `entry`. A win on a deterministic axis (heap, size) is
+/// settled; a cycles win measured at `solo` trust is provisional, so it
+/// leaves the clause pending until a quiet host has measured it, as does a
+/// cycles win beyond ε that only a `solo` A/A band hides.
 fn frontier(data: &Data, entry: &str) -> Clause {
     let mut pending = Vec::new();
-    let mut wins = Vec::new();
+    let mut settled = Vec::new();
+    let mut provisional = Vec::new();
+    let mut hidden = Vec::new();
     for workload in KYNOS {
         for axis in AXES {
-            let Some(mine) = figure(data, axis, entry, workload) else {
-                pending.push(format!("{} at {workload}", axis.name));
-                continue;
-            };
-            let mut beats_both = true;
-            for baseline in ["serde_json", "prost"] {
-                let (Some(theirs), Some(band)) = (
-                    figure(data, axis, baseline, workload),
-                    aa_band(data, axis, baseline, workload),
-                ) else {
-                    pending.push(format!("{} at {workload} ({baseline})", axis.name));
-                    beats_both = false;
-                    continue;
-                };
-                let margin = EPSILON.max(band);
-                let better = mine < theirs * (1.0 - margin);
-                let agrees = axis.field != "cycles"
-                    || matches!(
-                        (counted(data, axis, entry, workload), counted(data, axis, baseline, workload)),
-                        (Some(m), Some(t)) if m < t
-                    );
-                beats_both &= better && agrees;
-            }
-            if beats_both {
-                wins.push(format!("{} at {workload}", axis.name));
+            let solo = win_trust(data, axis, entry, workload) != "canonical";
+            match beats_both(data, axis, entry, workload, true) {
+                Err(gap) => pending.push(gap),
+                Ok(true) if solo => provisional.push(format!("{} at {workload}", axis.name)),
+                Ok(true) => settled.push(format!("{} at {workload}", axis.name)),
+                Ok(false) if solo && beats_both(data, axis, entry, workload, false) == Ok(true) => {
+                    hidden.push(format!("{} at {workload}", axis.name));
+                }
+                Ok(false) => {}
             }
         }
     }
-    if !wins.is_empty() {
+    if !settled.is_empty() {
         Clause::Pass(format!(
             "better than serde_json and prost beyond the margin on {}",
-            wins.join(", ")
+            settled.join(", ")
+        ))
+    } else if !provisional.is_empty() {
+        Clause::Pending(format!(
+            "provisional: better beyond the margin on {}, measured at solo trust; awaits a canonical rerun",
+            provisional.join(", ")
         ))
     } else if !pending.is_empty() {
         Clause::Pending(format!("not measured: {}", pending.join(", ")))
+    } else if !hidden.is_empty() {
+        Clause::Pending(format!(
+            "better beyond ε but inside the solo A/A band on {}; awaits a canonical rerun",
+            hidden.join(", ")
+        ))
     } else {
         Clause::Fail(
             "on no axis 1–4 at a Kynos workload better than both serde_json and prost beyond the margin".into(),
@@ -834,6 +876,48 @@ mod tests {
             row["raw"] = json!(90);
         }
         assert_eq!(frontier(&data, "ciborium").word(), "pass");
+    }
+
+    /// Hardware cycles for every entry the frontier reads at the Kynos
+    /// workloads, taken at `trust`, with callgrind agreeing.
+    fn cycles(trust: &str, ciborium: f64) -> Data {
+        use super::super::data::Table;
+        let mut data = Data::default();
+        let (mut hw, mut cg) = (Table::default(), Table::default());
+        for (entry, cycles) in [
+            ("serde_json", 100.0),
+            ("serde_json#aa", 100.0),
+            ("prost", 100.0),
+            ("prost#aa", 100.0),
+            ("ciborium", ciborium),
+        ] {
+            for workload in KYNOS {
+                for op in ["decode", "encode"] {
+                    let key = Key::new(DECIDING_VARIANT, entry, workload, op);
+                    hw.rows
+                        .insert(key.clone(), json!({ "cycles": cycles, "rounds": [], "trust": trust }));
+                    cg.rows.insert(key, json!({ "est_cycles": cycles }));
+                }
+            }
+        }
+        data.host.hw = hw;
+        data.callgrind = cg;
+        data
+    }
+
+    /// A cycles win at `solo` trust is provisional: pending, not passed.
+    #[test]
+    fn a_solo_cycles_win_is_provisional() {
+        let solo = frontier(&cycles("solo", 80.0), "ciborium");
+        assert!(
+            matches!(&solo, Clause::Pending(why) if why.starts_with("provisional")),
+            "{solo:?}"
+        );
+        let canonical = frontier(&cycles("canonical", 80.0), "ciborium");
+        assert!(
+            matches!(&canonical, Clause::Pass(why) if why.contains("decode cycles")),
+            "{canonical:?}"
+        );
     }
 
     /// Fewer heap blocks, or a smaller compressed body, is a win of its own.

@@ -770,6 +770,28 @@ fn exports_section(exports: &[Export], out: &mut String) {
     table(out, &["File", "Holds", "Rows"], &rows);
 }
 
+/// The trust class a timed file was measured under, from its rows (each
+/// timed row carries its own): `canonical` only if every row is. A file of
+/// counts or sizes has none.
+fn trust_of(data: &Data, name: &str) -> &'static str {
+    let rows: Vec<&Value> = if name.ends_with("/hw.json") {
+        data.host.hw.rows.values().collect()
+    } else if name.ends_with("/time.json") {
+        data.host.time.rows.values().collect()
+    } else if name.ends_with("/e2e-time.json") {
+        data.host.e2e_time.iter().collect()
+    } else {
+        return "–";
+    };
+    if rows.is_empty() {
+        "–"
+    } else if rows.iter().all(|r| r["trust"] == "canonical") {
+        "canonical"
+    } else {
+        "solo"
+    }
+}
+
 fn provenance_section(data: &Data, out: &mut String) {
     section(
         out,
@@ -801,7 +823,7 @@ fn provenance_section(data: &Data, out: &mut String) {
                     .and_then(|r| r.lines().next())
                     .unwrap_or("")
                     .to_owned(),
-                p["trust"].as_str().unwrap_or("").to_owned(),
+                trust_of(data, &s.name).to_owned(),
                 p["loadavg"].as_str().unwrap_or("").to_owned(),
             ]
         })
@@ -820,4 +842,33 @@ fn provenance_section(data: &Data, out: &mut String) {
         ],
         &rows,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::trust_of;
+    use crate::report::data::{Data, Key};
+
+    /// Trust is stamped per row, not in a file's provenance.
+    #[test]
+    fn the_trust_column_reads_the_rows() {
+        let mut data = Data::default();
+        let row = |trust: &str| json!({ "trust": trust });
+        data.host
+            .hw
+            .rows
+            .insert(Key::new("portable", "a", "w", "decode"), row("canonical"));
+        assert_eq!(trust_of(&data, "x86_64-linux-h/hw.json"), "canonical");
+        data.host
+            .hw
+            .rows
+            .insert(Key::new("portable", "b", "w", "decode"), row("solo"));
+        assert_eq!(trust_of(&data, "x86_64-linux-h/hw.json"), "solo");
+        data.host.e2e_time.push(row("canonical"));
+        assert_eq!(trust_of(&data, "x86_64-linux-h/e2e-time.json"), "canonical");
+        assert_eq!(trust_of(&data, "x86_64-linux-h/time.json"), "–");
+        assert_eq!(trust_of(&data, "callgrind/x86_64.json"), "–");
+    }
 }
