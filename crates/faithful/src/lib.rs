@@ -18,7 +18,7 @@
 //! | --- | --- | --- |
 //! | Ill-formed (RFC 8949 §5.1): truncated, additional information 28–30, a break outside an indefinite item, an indefinite string with a chunk of another type, a two-byte simple value below 32, bytes after the item | 400 | not CBOR |
 //! | A text string that is not UTF-8 (§5.3.1) | 400 | not a valid CBOR item |
-//! | Nested deeper than [`MAX_DEPTH`] | 400 | the depth `Json<T>` refuses past |
+//! | More than [`MAX_DEPTH`] (127) arrays and maps nested, empty ones included | 400 | `Json<T>` reads 127 levels and refuses the 128th |
 //! | A byte string (major type 2) | 422 | JSON has no bytes; a `contentEncoding: base64` string is text, not a byte string, so no schema is true of it |
 //! | Any tag (major type 6): date-times (0, 1), bignums (2, 3), decimal and big floats (4, 5), self-described CBOR (55799), every other | 422 | a tag has no JSON Schema form; a decoder that ignored it would accept a value the schema does not describe |
 //! | `undefined` and every simple value but `false`, `true`, `null` | 422 | no JSON value |

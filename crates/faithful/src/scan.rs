@@ -12,8 +12,12 @@
 use std::borrow::Cow;
 use std::fmt;
 
-/// The deepest nesting accepted: serde_json's limit, which `Json<T>` holds.
-pub const MAX_DEPTH: usize = 128;
+/// The deepest nesting accepted, in arrays and maps: 127, the most
+/// `Json<T>` reads. serde_json 1.0.154 starts a document with a
+/// `remaining_depth` of 128 and, entering an array or object, decrements it
+/// and refuses at zero (`de.rs`, `check_recursion!`), so 127 levels read and
+/// the 128th is refused.
+pub const MAX_DEPTH: usize = 127;
 
 /// Why a body is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +42,7 @@ pub enum Rule {
     Trailing,
     /// A text string that is not UTF-8. 400.
     InvalidUtf8,
-    /// Nested deeper than [`MAX_DEPTH`]. 400.
+    /// More than [`MAX_DEPTH`] arrays and maps nested. 400.
     TooDeep,
     /// A byte string. 422.
     ByteString,
@@ -381,6 +385,7 @@ impl<'a> Walker<'a> {
                     }
                     let map = (head.major == 5).then_some(self.keys.len());
                     if items == Some(0) {
+                        self.enter(head.offset)?;
                         if let Some(start) = map {
                             self.close_map(start, head.offset);
                         }
@@ -447,16 +452,20 @@ impl<'a> Walker<'a> {
     }
 
     fn open(&mut self, frame: Frame, offset: usize) -> Result<(), Refusal> {
-        // The stack is on the heap, so only the profile needs a bound.
-        if self.mode != Mode::Profile {
-            self.stack.push(frame);
-            return Ok(());
-        }
-        let depth = self.stack.iter().filter(|f| !matches!(f, Frame::Chunks { .. })).count();
-        if depth >= MAX_DEPTH {
+        self.enter(offset)?;
+        self.stack.push(frame);
+        Ok(())
+    }
+
+    /// Refuse an array or map that would be nested deeper than
+    /// [`MAX_DEPTH`], empty or not. Every open frame is an array or a map:
+    /// an indefinite string holds only its chunks, so none is open beneath
+    /// a container. The stack is on the heap, so only the profile needs a
+    /// bound.
+    fn enter(&self, offset: usize) -> Result<(), Refusal> {
+        if self.mode == Mode::Profile && self.stack.len() >= MAX_DEPTH {
             return refuse(Rule::TooDeep, offset);
         }
-        self.stack.push(frame);
         Ok(())
     }
 

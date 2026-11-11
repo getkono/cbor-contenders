@@ -155,10 +155,36 @@ fn transparent_encodings_are_accepted() {
 
 #[test]
 fn nesting_is_bounded_without_recursion() {
-    let ok: Vec<u8> = std::iter::repeat_n(0x81, MAX_DEPTH).chain([0x00]).collect();
-    assert_eq!(scan(&ok), Ok(()));
-    let deep: Vec<u8> = std::iter::repeat_n(0x81, MAX_DEPTH + 1).chain([0x00]).collect();
-    assert_eq!(scan(&deep).expect_err("too deep").rule, Rule::TooDeep);
+    // serde_json's limit: 127 nested arrays or maps read, the 128th does not.
+    assert_eq!(MAX_DEPTH, 127);
+    for (levels, json_reads) in [(127, true), (128, false)] {
+        let json = format!("{}{}", "[".repeat(levels), "]".repeat(levels));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).is_ok(),
+            json_reads,
+            "{levels}"
+        );
+        let arrays: Vec<u8> = std::iter::repeat_n(0x81, levels - 1).chain([0x80]).collect();
+        let maps: Vec<u8> = std::iter::repeat_n([0xa1, 0x61, 0x61], levels - 1)
+            .flatten()
+            .chain([0xa0])
+            .collect();
+        let indefinite: Vec<u8> = std::iter::repeat_n(0x9f, levels)
+            .chain(std::iter::repeat_n(0xff, levels))
+            .collect();
+        for body in [arrays, maps, indefinite] {
+            match scan(&body) {
+                Ok(()) => assert!(json_reads, "{levels}: {body:02x?}"),
+                Err(refusal) => {
+                    assert!(!json_reads, "{levels}: {body:02x?}");
+                    assert_eq!(refusal.rule, Rule::TooDeep);
+                }
+            }
+        }
+    }
+    // Indefinite strings are not containers.
+    let text: Vec<u8> = std::iter::repeat_n(0x81, 126).chain([0x7f, 0x61, 0x61, 0xff]).collect();
+    assert_eq!(scan(&text), Ok(()));
     // A million levels is refused at the limit, on a small stack.
     let huge: Vec<u8> = std::iter::repeat_n(0x9f, 1_000_000).collect();
     let rule = std::thread::Builder::new()
