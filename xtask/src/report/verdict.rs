@@ -80,16 +80,19 @@ pub fn candidates() -> Vec<(&'static str, &'static str, &'static str)> {
         .collect()
 }
 
-/// One axis of clause 2: what it reads, and whether lower is better (always).
+/// One axis of clause 2: what it reads. Lower is better on every one.
 #[derive(Debug, Clone, Copy)]
 pub struct Axis {
     pub name: &'static str,
     pub op: &'static str,
-    /// `cycles` (hw), `bytes` (alloc), `raw` (wire).
+    /// `cycles` (hw.json); `allocations` or `bytes` (alloc.json); `raw`,
+    /// `gzip` or `zstd` (wire.json).
     pub field: &'static str,
 }
 
-/// Axes 1 to 4.
+/// Axes 1 to 4 (#989 section 2), each figure its own axis: decode and
+/// encode cycles; heap blocks and bytes per decode and per encode; encoded
+/// size raw, gzip and zstd.
 pub const AXES: &[Axis] = &[
     Axis {
         name: "decode cycles",
@@ -102,9 +105,19 @@ pub const AXES: &[Axis] = &[
         field: "cycles",
     },
     Axis {
+        name: "decode heap blocks",
+        op: "decode",
+        field: "allocations",
+    },
+    Axis {
         name: "decode heap bytes",
         op: "decode",
         field: "bytes",
+    },
+    Axis {
+        name: "encode heap blocks",
+        op: "encode",
+        field: "allocations",
     },
     Axis {
         name: "encode heap bytes",
@@ -116,6 +129,16 @@ pub const AXES: &[Axis] = &[
         op: "encode",
         field: "raw",
     },
+    Axis {
+        name: "encoded size gzip",
+        op: "encode",
+        field: "gzip",
+    },
+    Axis {
+        name: "encoded size zstd",
+        op: "encode",
+        field: "zstd",
+    },
 ];
 
 /// An entry's figure on `axis` at `workload` (portable, the server's shape).
@@ -123,12 +146,12 @@ pub fn figure(data: &Data, axis: &Axis, entry: &str, workload: &str) -> Option<f
     let key = Key::new(DECIDING_VARIANT, entry, workload, axis.op);
     match axis.field {
         "cycles" => data.host.hw.get(&key, "cycles"),
-        "bytes" => data.host.alloc.get(&key, "bytes"),
-        _ => data
+        "allocations" | "bytes" => data.host.alloc.get(&key, axis.field),
+        field => data
             .wire
             .iter()
             .find(|r| r["backend"] == entry && r["workload"] == workload)
-            .and_then(|r| r["raw"].as_f64()),
+            .and_then(|r| r[field].as_f64()),
     }
 }
 
@@ -790,7 +813,7 @@ mod tests {
                     let key = Key::new(DECIDING_VARIANT, entry, workload, op);
                     hw.rows.insert(key.clone(), json!({ "cycles": cycles, "rounds": [] }));
                     cg.rows.insert(key.clone(), json!({ "est_cycles": est }));
-                    alloc.rows.insert(key, json!({ "bytes": bytes }));
+                    alloc.rows.insert(key, json!({ "allocations": bytes, "bytes": bytes }));
                 }
             }
         }
@@ -800,7 +823,7 @@ mod tests {
         for entry in ["serde_json", "prost", "ciborium"] {
             for workload in KYNOS {
                 data.wire
-                    .push(json!({ "backend": entry, "workload": workload, "raw": 100 }));
+                    .push(json!({ "backend": entry, "workload": workload, "raw": 100, "gzip": 100, "zstd": 100 }));
             }
         }
         // Faster in cycles, but callgrind says slower: no win; nothing else
@@ -811,5 +834,33 @@ mod tests {
             row["raw"] = json!(90);
         }
         assert_eq!(frontier(&data, "ciborium").word(), "pass");
+    }
+
+    /// Fewer heap blocks, or a smaller compressed body, is a win of its own.
+    #[test]
+    fn blocks_and_compressed_sizes_are_axes_of_their_own() {
+        use super::super::data::Table;
+        let mut data = Data::default();
+        let mut alloc = Table::default();
+        for (entry, blocks) in [("serde_json", 10.0), ("prost", 10.0), ("ciborium", 5.0)] {
+            for workload in KYNOS {
+                for op in ["decode", "encode"] {
+                    alloc.rows.insert(
+                        Key::new(DECIDING_VARIANT, entry, workload, op),
+                        json!({ "allocations": blocks, "bytes": 100.0 }),
+                    );
+                }
+            }
+        }
+        data.host.alloc = alloc;
+        let win = frontier(&data, "ciborium");
+        assert!(
+            matches!(&win, Clause::Pass(why) if why.contains("decode heap blocks")),
+            "{win:?}"
+        );
+        let gzip = AXES.iter().find(|a| a.field == "gzip").unwrap();
+        data.wire
+            .push(json!({ "backend": "ciborium", "workload": "json-small", "raw": 1, "gzip": 7, "zstd": 8 }));
+        assert_eq!(figure(&data, gzip, "ciborium", "json-small"), Some(7.0));
     }
 }
