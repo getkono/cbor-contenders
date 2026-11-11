@@ -2,52 +2,25 @@
 
 use bytes::{Bytes, BytesMut};
 
-/// A body a borrowed decode may borrow from.
-///
-/// Starts as the `Bytes` the server received. A backend that parses in place
-/// asks for [`Body::make_mut`], which reuses the allocation when the `Bytes`
-/// is unique and copies it when it is shared — the copy an in-place parser
-/// costs a real server, counted where it happens.
+/// A body a borrowed decode may borrow from: the `Bytes` the server
+/// received, which every backend reads in place.
 #[derive(Debug)]
 pub struct Body {
-    frozen: Bytes,
-    thawed: Option<BytesMut>,
+    bytes: Bytes,
 }
 
 impl Body {
     /// Wrap a received body.
     #[must_use]
     pub fn new(bytes: Bytes) -> Self {
-        Self {
-            frozen: bytes,
-            thawed: None,
-        }
+        Self { bytes }
     }
 
     /// The bytes, read-only.
     #[must_use]
     pub fn as_slice(&self) -> &[u8] {
-        self.thawed.as_deref().unwrap_or(&self.frozen)
+        &self.bytes
     }
-
-    /// The bytes, writable: zero-copy if unique, a copy otherwise.
-    pub fn make_mut(&mut self) -> &mut [u8] {
-        let thawed = self.thawed.get_or_insert_with(|| {
-            let frozen = std::mem::take(&mut self.frozen);
-            frozen
-                .try_into_mut()
-                .unwrap_or_else(|shared| BytesMut::from(&shared[..]))
-        });
-        &mut thawed[..]
-    }
-}
-
-/// Make `bytes` writable the way [`Body::make_mut`] does, for owned decodes.
-#[must_use]
-pub fn thaw(bytes: Bytes) -> BytesMut {
-    bytes
-        .try_into_mut()
-        .unwrap_or_else(|shared| BytesMut::from(&shared[..]))
 }
 
 /// The two ways a server receives a body.
