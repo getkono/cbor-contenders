@@ -250,6 +250,12 @@ pub fn e2e_entries(set: &Set) -> Vec<&'static str> {
         .collect()
 }
 
+/// Every entry served end to end, across the sets.
+#[must_use]
+pub fn e2e_entries_all() -> Vec<&'static str> {
+    SETS.iter().flat_map(e2e_entries).collect()
+}
+
 /// The floors served end to end, one per format an entry speaks.
 pub const FLOORS: &[&str] = &["floor-json", "floor-cbor", "floor-protobuf"];
 

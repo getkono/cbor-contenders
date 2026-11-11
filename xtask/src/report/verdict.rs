@@ -216,7 +216,50 @@ fn frontier(data: &Data, entry: &str) -> Clause {
     }
 }
 
-/// Clause 3 for `entry` of `set`.
+/// The depth `Json<T>` refuses past: serde_json's recursion limit, which the
+/// worked codec matches.
+pub const JSON_DEPTH: u32 = 128;
+
+/// What a cell's `rejected` verdict means for clause 3. A `rejected` cell
+/// is a valid workload the library refused (the bodies that must be refused
+/// are judged `exact` or `wrong` instead):
+///
+/// - an operation the library does not have (`Unsupported`: ciborium has no
+///   borrowing decode), or a workload a native format does not carry, is
+///   recorded, not a wrong answer;
+/// - a refusal with a syntax status (400) of a `nested-N` workload deeper
+///   than [`JSON_DEPTH`] is the library's depth limit, which RFC 8949 leaves
+///   to the implementation and `Json<T>` itself refuses: recorded;
+/// - any other refusal is a wrong answer to a client, as a server answers
+///   it: a body the oracle decodes and the library will not, or a value it
+///   will not encode.
+#[must_use]
+pub fn refusal_is_wrong(workload: &str, detail: &str) -> bool {
+    if detail.starts_with("Unsupported") || detail == "not carried by the native formats" {
+        return false;
+    }
+    let deep = workload
+        .strip_prefix("nested-")
+        .and_then(|d| d.parse::<u32>().ok())
+        .is_some_and(|d| d > JSON_DEPTH);
+    // `Failure`'s display leads with its class; only `Data` answers 422.
+    let syntax = !detail.starts_with("Data");
+    !(deep && syntax)
+}
+
+/// The per-operation tables clause 3 reads, by name.
+fn measured_tables(data: &Data) -> [(&'static str, &super::data::Table); 4] {
+    [
+        ("callgrind", &data.callgrind),
+        ("alloc", &data.host.alloc),
+        ("hw", &data.host.hw),
+        ("time", &data.host.time),
+    ]
+}
+
+/// Clause 3 for `entry` of `set`. It passes only on evidence: every source
+/// it reads must hold rows for the entry, so a stage that did not run, or
+/// that `results/skipped.toml` excused, leaves it pending, never passed.
 fn conformance(data: &Data, entry: &str, set: &str) -> Clause {
     let mut failures = Vec::new();
     let mut pending = Vec::new();
@@ -242,24 +285,50 @@ fn conformance(data: &Data, entry: &str, set: &str) -> Clause {
         // schema, which is itself a failure of section 5).
         failures.push("its wire form (a struct as an array) has no faithful JSON Schema (section 5)".into());
     }
-    let wrong = |rows: &mut dyn Iterator<Item = &Value>| {
-        rows.filter(|r| r["backend"] == entry && r["verdict"] == "wrong")
-            .count()
-    };
-    let measured = wrong(&mut data.callgrind.rows.values())
-        + wrong(&mut data.host.alloc.rows.values())
-        + wrong(&mut data.host.hw.rows.values());
-    if measured > 0 {
-        failures.push(format!("{measured} measured cells answered wrongly"));
+    let mut wrong = 0;
+    let mut refused: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for (name, table) in measured_tables(data) {
+        let rows: Vec<(&super::data::Key, &Value)> = table.rows.iter().filter(|(k, _)| k.backend == entry).collect();
+        if rows.is_empty() {
+            pending.push(format!("no {name} cells"));
+        }
+        for (key, row) in rows {
+            match row["verdict"].as_str() {
+                Some("wrong") => wrong += 1,
+                Some("rejected") if refusal_is_wrong(&key.workload, row["detail"].as_str().unwrap_or("")) => {
+                    refused.insert(format!("{} {}", key.workload, key.op));
+                }
+                _ => {}
+            }
+        }
     }
-    let e2e = wrong(&mut data.e2e_count.iter()) + wrong(&mut data.host.e2e_time.iter());
-    if e2e > 0 {
-        failures.push(format!("{e2e} end-to-end routes answered wrongly"));
+    if wrong > 0 {
+        failures.push(format!("{wrong} measured cells answered wrongly"));
+    }
+    if !refused.is_empty() {
+        failures.push(format!(
+            "refused valid workloads: {}",
+            refused.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if crate::matrix::e2e_entries_all().contains(&entry) {
+        for (name, rows) in [("e2e-count", &data.e2e_count), ("e2e-time", &data.host.e2e_time)] {
+            let mine: Vec<&Value> = rows.iter().filter(|r| r["backend"] == entry).collect();
+            if mine.is_empty() {
+                pending.push(format!("no {name} routes"));
+            }
+            let e2e = mine.iter().filter(|r| r["verdict"] == "wrong").count();
+            if e2e > 0 {
+                failures.push(format!("{e2e} {name} routes answered wrongly"));
+            }
+        }
     }
     if crate::matrix::conformance_subject(entry) {
         let runs: Vec<&Value> = data.fuzz.iter().filter(|r| r["backend"] == entry).collect();
-        if runs.is_empty() {
-            pending.push("fuzzing".into());
+        for target in crate::fuzzing::FUZZ_TARGETS {
+            if !runs.iter().any(|r| r["target"] == *target && r["finished"] == true) {
+                pending.push(format!("fuzzing {target}"));
+            }
         }
         // A sanitizer report is a divergence whatever the run recorded: a
         // run from before it was counted as one says so only there.
@@ -550,6 +619,92 @@ mod tests {
             matches!(&c4, Clause::Fail(why) if why.contains("RUSTSEC-2099-0001")),
             "{c4:?}"
         );
+    }
+
+    /// Everything clause 3 reads, clean, for ciborium.
+    fn clean_ciborium() -> Data {
+        use super::super::data::Table;
+        let mut data = Data::default();
+        for variant in crate::matrix::variants() {
+            data.host.conformance.insert(
+                (variant.name.to_owned(), "ciborium".to_owned()),
+                json!({ "backends": { "ciborium": { "gate": "pass" } } }),
+            );
+        }
+        let table = || {
+            let mut t = Table::default();
+            t.rows.insert(
+                Key::new(DECIDING_VARIANT, "ciborium", "json-small", "decode"),
+                json!({ "verdict": "exact" }),
+            );
+            t
+        };
+        data.callgrind = table();
+        data.host.alloc = table();
+        data.host.hw = table();
+        data.host.time = table();
+        for target in crate::fuzzing::FUZZ_TARGETS {
+            data.fuzz.push(json!({ "set": "ciborium", "backend": "ciborium", "target": target, "finished": true, "divergence_found": false }));
+        }
+        data.miri.push(json!({ "set": "ciborium", "outcome": "pass" }));
+        let route = json!({ "backend": "ciborium", "route": "echo-post" });
+        data.e2e_count.push(route.clone());
+        data.host.e2e_time.push(route);
+        data
+    }
+
+    #[test]
+    fn clause_3_passes_only_on_every_source() {
+        assert_eq!(conformance(&clean_ciborium(), "ciborium", "ciborium").word(), "pass");
+        // A stage that did not run, or that skipped.toml excused, leaves an
+        // empty table: pending, never passed.
+        let without: [fn(&mut Data); 6] = [
+            |d| d.host.time.rows.clear(),
+            |d| d.callgrind.rows.clear(),
+            |d| d.host.e2e_time.clear(),
+            |d| d.e2e_count.clear(),
+            |d| d.fuzz.truncate(1),
+            |d| d.miri.clear(),
+        ];
+        for (i, drop) in without.iter().enumerate() {
+            let mut data = clean_ciborium();
+            drop(&mut data);
+            assert_eq!(conformance(&data, "ciborium", "ciborium").word(), "pending", "case {i}");
+        }
+    }
+
+    #[test]
+    fn a_wrong_time_cell_or_route_fails_clause_3() {
+        let mut data = clean_ciborium();
+        for row in data.host.time.rows.values_mut() {
+            row["verdict"] = json!("wrong");
+        }
+        assert_eq!(conformance(&data, "ciborium", "ciborium").word(), "fail");
+        let mut data = clean_ciborium();
+        data.host.e2e_time[0]["verdict"] = json!("wrong");
+        assert_eq!(conformance(&data, "ciborium", "ciborium").word(), "fail");
+    }
+
+    /// A refused valid workload is a wrong answer, but a 400 past the depth
+    /// `Json<T>` refuses is a recorded limit, as is an operation the library
+    /// does not have.
+    #[test]
+    fn a_refused_valid_workload_fails_unless_it_is_a_depth_limit() {
+        let refusing = |workload: &str, detail: &str| {
+            let mut data = clean_ciborium();
+            data.callgrind.rows.insert(
+                Key::new(DECIDING_VARIANT, "ciborium", workload, "decode"),
+                json!({ "verdict": "rejected", "detail": detail }),
+            );
+            conformance(&data, "ciborium", "ciborium").word()
+        };
+        assert_eq!(refusing("nested-257", "Syntax: recursion limit exceeded"), "pass");
+        assert_eq!(refusing("nested-10000", "Syntax: recursion limit exceeded"), "pass");
+        assert_eq!(refusing("nested-255", "Syntax: recursion limit exceeded"), "pass");
+        assert_eq!(refusing("nested-100", "Syntax: recursion limit exceeded"), "fail");
+        assert_eq!(refusing("nested-10000", "Data: invalid type"), "fail");
+        assert_eq!(refusing("floats", "Syntax: invalid"), "fail");
+        assert_eq!(refusing("json-large", "Unsupported: does not borrow"), "pass");
     }
 
     /// Recorded as no divergence (as runs before the fix were), the report
