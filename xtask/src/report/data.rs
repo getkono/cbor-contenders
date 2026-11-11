@@ -390,9 +390,15 @@ fn recount_gaps(data: &Data) -> Vec<String> {
     gaps
 }
 
+/// Whether `name` (under `results/`) was read: present, not skipped. A
+/// file that is missing or skipped is the loader's to report; one that is
+/// present is checked for every row it should hold, even when it holds none.
+fn read(data: &Data, name: &str) -> bool {
+    data.sources.iter().any(|s| s.name == name && s.skipped.is_none())
+}
+
 /// What a complete `mise run all` would have written and did not.
 #[must_use]
-#[expect(clippy::too_many_lines, reason = "one check per result file, in order")]
 pub fn incomplete(data: &Data) -> Vec<String> {
     if data.pending {
         return Vec::new();
@@ -402,6 +408,32 @@ pub fn incomplete(data: &Data) -> Vec<String> {
         .iter()
         .map(|m| format!("results/{m}: missing (and not declared in results/skipped.toml)"))
         .collect();
+    gaps.extend(per_operation_gaps(data));
+    gaps.extend(recount_gaps(data));
+    gaps.extend(doctor_gaps(data));
+    for ((variant, set), report) in &data.host.conformance {
+        if let Some(e) = report["error"].as_str() {
+            gaps.push(format!("conformance/{variant}/{set}: the suite did not finish ({e})"));
+        }
+        for (name, entry) in report["backends"].as_object().into_iter().flatten() {
+            if let Some(e) = entry["error"].as_str() {
+                gaps.push(format!(
+                    "conformance/{variant}/{set}: the {name} suite did not finish ({e})"
+                ));
+            }
+        }
+    }
+    gaps.extend(per_set_gaps(data));
+    gaps.extend(wire_gaps(data));
+    gaps.extend(end_to_end_gaps(data));
+    gaps.extend(fuzz_and_miri_gaps(data));
+    gaps
+}
+
+/// The per-operation tables' missing and failed rows, counted per file
+/// with the first named.
+fn per_operation_gaps(data: &Data) -> Vec<String> {
+    let at = |f: &str| format!("{}/{f}", data.host.slug);
     let per_op: [PerOperation<'_>; 4] = [
         (
             "callgrind/x86_64.json",
@@ -426,9 +458,15 @@ pub fn incomplete(data: &Data) -> Vec<String> {
             true,
         ),
     ];
+    let mut gaps = Vec::new();
     for (name, table, variants, shapes, aa) in per_op {
-        if table.rows.is_empty() {
-            continue; // missing or skipped: said above
+        let file = if name.starts_with("callgrind/") {
+            name.to_owned()
+        } else {
+            at(name)
+        };
+        if !read(data, &file) {
+            continue;
         }
         let workloads: Vec<&str> = if name == "time.json" {
             crate::timed::default_workloads()
@@ -438,6 +476,7 @@ pub fn incomplete(data: &Data) -> Vec<String> {
         } else {
             payloads::ALL.to_vec()
         };
+        let (mut missing, mut failed, mut first) = (0usize, 0usize, None);
         for variant in variants {
             for set in SETS {
                 for backend in set.backends {
@@ -456,77 +495,200 @@ pub fn incomplete(data: &Data) -> Vec<String> {
                                     form: shape.form.to_owned(),
                                     arrival: shape.arrival.to_owned(),
                                 };
-                                match table.row(&key) {
-                                    None => gaps.push(format!("{name}: no row for {key:?}")),
-                                    Some(row) if row["error"].is_string() => {
-                                        gaps.push(format!("{name}: {key:?} failed: {}", row["error"]));
-                                    }
-                                    Some(_) => {}
+                                // A wrong or refused result is a result
+                                // (clause 3 reads it); an error is a cell
+                                // that did not run.
+                                let what = match table.row(&key) {
+                                    None => "missing",
+                                    Some(row) if row["error"].is_string() => "failed",
+                                    Some(_) => continue,
+                                };
+                                if what == "missing" {
+                                    missing += 1;
+                                } else {
+                                    failed += 1;
                                 }
+                                first.get_or_insert_with(|| format!("{what}: {key:?}"));
                             }
                         }
                     }
                 }
             }
         }
-    }
-    gaps.extend(recount_gaps(data));
-    if !data.host.doctor.is_null() && data.host.doctor["failures"].as_array().is_some_and(|f| !f.is_empty()) {
-        gaps.push("doctor.json: doctor reported failures".into());
-    }
-    for ((variant, set), report) in &data.host.conformance {
-        if let Some(e) = report["error"].as_str() {
-            gaps.push(format!("conformance/{variant}/{set}: the suite did not finish ({e})"));
+        if missing + failed > 0 {
+            gaps.push(format!(
+                "{name}: {missing} rows missing, {failed} failed (first {})",
+                first.unwrap_or_default()
+            ));
         }
-        for (name, entry) in report["backends"].as_object().into_iter().flatten() {
-            if let Some(e) = entry["error"].as_str() {
-                gaps.push(format!(
-                    "conformance/{variant}/{set}: the {name} suite did not finish ({e})"
-                ));
+    }
+    gaps
+}
+
+/// Doctor's failures, and a doctor that did not check every measured build
+/// at every variant.
+fn doctor_gaps(data: &Data) -> Vec<String> {
+    let doctor = &data.host.doctor;
+    if doctor.is_null() {
+        return Vec::new();
+    }
+    let mut gaps = Vec::new();
+    if let Some(f) = doctor["failures"].as_array().filter(|f| !f.is_empty()) {
+        gaps.push(format!(
+            "doctor.json: {} builds not compiled as their variant claims (first: {})",
+            f.len(),
+            f[0]
+        ));
+    }
+    let builds = doctor["builds"].as_array().map_or(0, Vec::len);
+    let expected = crate::matrix::variants().len() * crate::matrix::measured_builds().len();
+    if builds != expected {
+        gaps.push(format!(
+            "doctor.json: {builds} builds checked, not every measured build at every variant ({expected})"
+        ));
+    }
+    gaps
+}
+
+/// The per-set files' missing rows, and the hand-written reviews' gaps.
+fn per_set_gaps(data: &Data) -> Vec<String> {
+    let at = |f: &str| format!("{}/{f}", data.host.slug);
+    let mut gaps = Vec::new();
+    let variants: Vec<&str> = crate::matrix::variants().iter().map(|v| v.name).collect();
+    for (file, rows, per_variant) in [
+        (at("size.json"), &data.host.size, true),
+        (at("compile-time.json"), &data.host.compile_time, false),
+        (at("msrv.json"), &data.host.msrv, false),
+        ("footprint.json".to_owned(), &data.footprint, false),
+    ] {
+        if !read(data, &file) {
+            continue;
+        }
+        let mut lacking = Vec::new();
+        for set in SETS {
+            for (krate, _) in set.costs {
+                let wanted: &[&str] = if per_variant { &variants } else { &[""] };
+                for v in wanted {
+                    let found = rows
+                        .iter()
+                        .any(|r| r["set"] == set.name && r["crate"] == *krate && (v.is_empty() || r["variant"] == *v));
+                    if !found {
+                        lacking.push(format!("{} {krate} {v}", set.name).trim().to_owned());
+                    }
+                }
             }
+        }
+        if !lacking.is_empty() {
+            gaps.push(format!("{file}: no row for {}", lacking.join(", ")));
         }
     }
     for set in SETS {
         for (krate, _) in set.costs {
-            for (file, rows) in [
-                ("size.json", &data.host.size),
-                ("compile-time.json", &data.host.compile_time),
-                ("msrv.json", &data.host.msrv),
-                ("footprint.json", &data.footprint),
-            ] {
-                if !rows.is_empty() && !rows.iter().any(|r| r["crate"] == *krate) {
-                    gaps.push(format!("{file}: no row for {krate}"));
-                }
-            }
-            if !data.soundness.contains_key(*krate) {
-                gaps.push(format!("soundness.toml: no entry for {krate}"));
+            // Clause 4 reads the hand review of open issues; a crate
+            // missing from it would pass unreviewed.
+            if data
+                .soundness
+                .get(*krate)
+                .and_then(|t| t.get("open"))
+                .and_then(toml::Value::as_array)
+                .is_none()
+            {
+                gaps.push(format!("soundness.toml: no `open` list for {krate}"));
             }
             if set.name != "baseline" && !data.maintenance.contains_key(*krate) {
                 gaps.push(format!("maintenance.toml: no entry for {krate}"));
             }
         }
-        for entry in crate::matrix::e2e_entries(set) {
-            for route in crate::endtoend::ROUTES {
-                if !data.e2e_count.is_empty()
-                    && !data
-                        .e2e_count
-                        .iter()
-                        .any(|r| r["backend"] == entry && r["route"] == route.0)
-                {
-                    gaps.push(format!("e2e-x86_64.json: no row for {entry} {}", route.0));
+    }
+    gaps
+}
+
+/// The entries and workloads `wire.json` has no size for.
+fn wire_gaps(data: &Data) -> Vec<String> {
+    if !read(data, "wire.json") {
+        return Vec::new();
+    }
+    let mut lacking = Vec::new();
+    for set in SETS {
+        for backend in set.backends {
+            for workload in payloads::ALL {
+                if crate::matrix::DECODE_ONLY.contains(workload) || for_workload(backend, workload, SHAPES).is_empty() {
+                    continue;
                 }
-                if !data.host.e2e_time.is_empty()
-                    && !data
-                        .host
-                        .e2e_time
-                        .iter()
-                        .any(|r| r["backend"] == entry && r["route"] == route.0)
+                // An entry that cannot encode a value has a row saying so.
+                if !data
+                    .wire
+                    .iter()
+                    .any(|r| r["set"] == set.name && r["backend"] == *backend && r["workload"] == *workload)
                 {
-                    gaps.push(format!("e2e-time.json: no row for {entry} {}", route.0));
+                    lacking.push(format!("{backend} {workload}"));
                 }
             }
         }
-        if !data.fuzz.is_empty() {
+    }
+    if lacking.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "wire.json: {} sizes missing (first {})",
+            lacking.len(),
+            lacking[0]
+        )]
+    }
+}
+
+/// The servers and routes an end-to-end file lacks, or whose run failed:
+/// every entry and floor, at its variants, with the baselines' A/A copies
+/// where the run is timed.
+fn end_to_end_gaps(data: &Data) -> Vec<String> {
+    let mut gaps = Vec::new();
+    let timed = format!("{}/e2e-time.json", data.host.slug);
+    for (name, rows, variants, aa) in [
+        ("callgrind/e2e-x86_64.json", &data.e2e_count, COUNTED_VARIANTS, false),
+        (timed.as_str(), &data.host.e2e_time, &[DECIDING_VARIANT][..], true),
+    ] {
+        if !read(data, name) {
+            continue;
+        }
+        let mut lacking = Vec::new();
+        for v in variants {
+            for set in SETS {
+                for backend in crate::endtoend::backends(set) {
+                    let mut labels = vec![backend.to_owned()];
+                    if aa && set.name == "baseline" && ["serde_json", "prost"].contains(&backend) {
+                        labels.push(format!("{backend}#aa"));
+                    }
+                    for b in labels {
+                        for route in crate::endtoend::ROUTES {
+                            let row = rows
+                                .iter()
+                                .find(|r| r["variant"] == *v && r["backend"] == b.as_str() && r["route"] == route.0);
+                            // A wrong answer is a result, which clause 3 reads.
+                            if row.is_none_or(|r| r["error"].is_string() && r["verdict"] != "wrong") {
+                                lacking.push(format!("{v} {b} {}", route.0));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !lacking.is_empty() {
+            gaps.push(format!(
+                "{name}: {} rows missing or failed (first {})",
+                lacking.len(),
+                lacking[0]
+            ));
+        }
+    }
+    gaps
+}
+
+/// Fuzz runs that are missing or did not finish, and sets Miri has no
+/// result for or could not run on.
+fn fuzz_and_miri_gaps(data: &Data) -> Vec<String> {
+    let mut gaps = Vec::new();
+    if read(data, "fuzz.json") {
+        for set in SETS {
             for run in crate::fuzzing::runs(set) {
                 let found = data
                     .fuzz
@@ -542,6 +704,20 @@ pub fn incomplete(data: &Data) -> Vec<String> {
             }
         }
     }
+    if read(data, "miri.json") {
+        for set in SETS
+            .iter()
+            .filter(|s| s.backends.iter().any(|b| crate::matrix::conformance_subject(b)))
+        {
+            match data.miri.iter().find(|r| r["set"] == set.name) {
+                None => gaps.push(format!("miri.json: no run for {}", set.name)),
+                Some(r) if r["outcome"] == "error" => {
+                    gaps.push(format!("miri.json: Miri itself failed for {}", set.name));
+                }
+                Some(_) => {}
+            }
+        }
+    }
     gaps
 }
 
@@ -550,6 +726,76 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{Data, Key, Table, recount_gaps};
+
+    fn source(name: &str) -> super::Source {
+        super::Source {
+            name: name.to_owned(),
+            ..super::Source::default()
+        }
+    }
+
+    /// A file that is present is checked even when it holds no rows: an
+    /// empty table is no stand-in for a measurement nobody took.
+    #[test]
+    fn a_present_file_with_no_rows_is_checked() {
+        let host = "x86_64-linux-h";
+        let mut data = Data::default();
+        data.host.slug = host.into();
+        for name in [
+            "wire.json".to_owned(),
+            "miri.json".to_owned(),
+            "fuzz.json".to_owned(),
+            "callgrind/e2e-x86_64.json".to_owned(),
+            format!("{host}/e2e-time.json"),
+            format!("{host}/size.json"),
+            format!("{host}/hw.json"),
+        ] {
+            data.sources.push(source(&name));
+        }
+        data.host.doctor = json!({ "failures": [], "builds": [] });
+        let gaps = super::incomplete(&data).join("\n");
+        for want in [
+            "wire.json:",
+            "miri.json: no run for ciborium",
+            "fuzz.json: no run for",
+            "callgrind/e2e-x86_64.json:",
+            "e2e-time.json:",
+            "size.json: no row for",
+            "hw.json:",
+            "doctor.json: 0 builds checked",
+            "soundness.toml: no `open` list for ciborium",
+        ] {
+            assert!(gaps.contains(want), "no gap {want:?} in:\n{gaps}");
+        }
+    }
+
+    /// The timed end-to-end file needs every floor and both A/A copies.
+    #[test]
+    fn the_timed_end_to_end_file_needs_its_copies_and_floors() {
+        let host = "x86_64-linux-h";
+        let mut data = Data::default();
+        data.host.slug = host.into();
+        data.sources.push(source(&format!("{host}/e2e-time.json")));
+        for set in crate::matrix::SETS {
+            for backend in crate::endtoend::backends(set) {
+                for route in crate::endtoend::ROUTES {
+                    data.host
+                        .e2e_time
+                        .push(json!({ "variant": "portable", "backend": backend, "route": route.0 }));
+                }
+            }
+        }
+        let gaps = super::end_to_end_gaps(&data);
+        assert!(gaps.len() == 1 && gaps[0].contains("#aa"), "{gaps:?}");
+        for b in ["serde_json#aa", "prost#aa"] {
+            for route in crate::endtoend::ROUTES {
+                data.host
+                    .e2e_time
+                    .push(json!({ "variant": "portable", "backend": b, "route": route.0 }));
+            }
+        }
+        assert!(super::end_to_end_gaps(&data).is_empty());
+    }
 
     /// Three counted rows and two that hold no count: a refusal and an
     /// unsupported shape.
