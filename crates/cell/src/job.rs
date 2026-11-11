@@ -1,0 +1,647 @@
+//! One operation on one workload through one backend, and its inputs.
+
+use std::hint::black_box;
+use std::marker::PhantomData;
+
+use bytes::Bytes;
+use codecs::body::Arrival;
+use codecs::{Backend, Body, Native};
+use payloads::{Expect, Workload};
+use serde_json::{Value, json};
+
+use crate::modes;
+use crate::verify::{Verdict, judge_decode, judge_encoding, judge_native};
+
+/// Which operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    /// Bytes to `T`.
+    Decode,
+    /// `T` to a fresh `Vec` (`to_vec`).
+    Encode,
+    /// `T` into a reused, pre-sized `Vec` (`to_writer`).
+    EncodeInto,
+}
+
+impl Op {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "decode" => Some(Self::Decode),
+            "encode" => Some(Self::Encode),
+            "encode-into" => Some(Self::EncodeInto),
+            _ => None,
+        }
+    }
+}
+
+/// Which form of the workload type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// `String` fields.
+    Owned,
+    /// `Cow<'de, str>` fields.
+    Borrowed,
+}
+
+impl Form {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "owned" => Some(Self::Owned),
+            "borrowed" => Some(Self::Borrowed),
+            _ => None,
+        }
+    }
+}
+
+/// What was asked for on the command line.
+#[derive(Debug, Clone)]
+pub struct Spec {
+    pub mode: String,
+    pub op: Op,
+    pub form: Form,
+    pub arrival: Arrival,
+    pub iters: Option<u64>,
+}
+
+/// A measurable operation.
+pub trait Job {
+    /// Make `n` operations' inputs ready. Never measured.
+    fn prepare(&mut self, n: u64);
+    /// Perform one operation on the next prepared input. This is what is
+    /// measured, including dropping whatever it produced: the value, or for
+    /// a workload whose bytes must be refused, the error.
+    fn run(&mut self);
+    /// Run once and check the result.
+    fn verify(&mut self) -> Verdict;
+    /// Input or output size, in bytes.
+    fn size(&self) -> usize;
+}
+
+/// Iterations for a counted run: enough to amortize per-call noise, bounded
+/// so a large input's copies fit in memory.
+#[must_use]
+pub fn default_iters(size: usize) -> u64 {
+    ((4 << 20) / size.max(1)).clamp(1, 1000) as u64
+}
+
+/// Resolves the backend, then the workload.
+pub struct ByBackend<'a> {
+    pub spec: Spec,
+    pub workload: &'a str,
+}
+
+impl codecs::Visit for ByBackend<'_> {
+    type Output = Option<Value>;
+
+    fn visit<B: Backend>(self) -> Option<Value> {
+        payloads::dispatch(
+            self.workload,
+            ByWorkload::<B> {
+                spec: self.spec,
+                _b: PhantomData,
+            },
+        )
+    }
+}
+
+struct ByWorkload<B> {
+    spec: Spec,
+    _b: PhantomData<B>,
+}
+
+impl<B: Backend> payloads::Visit for ByWorkload<B> {
+    type Output = Value;
+
+    fn visit<W: Workload>(self) -> Value {
+        let spec = self.spec;
+        let header = json!({
+            "backend": B::NAME,
+            "crate": B::CRATE,
+            "workload": W::NAME,
+            "op": format!("{:?}", spec.op),
+            "form": format!("{:?}", spec.form),
+            "arrival": spec.arrival.name(),
+        });
+        let mut output = match (spec.op, spec.form) {
+            (Op::Decode, Form::Owned) => modes::run(&spec, &mut DecodeOwned::<B, W>::new(spec.arrival)),
+            (Op::Decode, Form::Borrowed) => modes::run(&spec, &mut DecodeBorrowed::<B, W>::new(spec.arrival)),
+            (Op::Encode | Op::EncodeInto, _) if !B::ENCODES => json!({ "verdict": "unsupported" }),
+            // A body that must be refused encodes no value: nothing to encode.
+            (Op::Encode | Op::EncodeInto, _) if W::EXPECT != Expect::Value => json!({
+                "verdict": "unsupported",
+                "detail": "decode-only workload: its bytes must be refused",
+            }),
+            (Op::Encode, _) => modes::run(&spec, &mut Encode::<B, W>::new(false)),
+            (Op::EncodeInto, _) => modes::run(&spec, &mut Encode::<B, W>::new(true)),
+        };
+        if let (Value::Object(out), Value::Object(head)) = (&mut output, header) {
+            out.extend(head);
+        }
+        output
+    }
+}
+
+/// Resolves a native backend, then the workload.
+pub struct ByNative<'a> {
+    pub spec: Spec,
+    pub workload: &'a str,
+}
+
+impl codecs::VisitNative for ByNative<'_> {
+    type Output = Option<Value>;
+
+    fn visit<N: Native>(self) -> Option<Value> {
+        payloads::dispatch(
+            self.workload,
+            NativeByWorkload::<N> {
+                spec: self.spec,
+                _n: PhantomData,
+            },
+        )
+    }
+}
+
+struct NativeByWorkload<N> {
+    spec: Spec,
+    _n: PhantomData<N>,
+}
+
+impl<N: Native> payloads::Visit for NativeByWorkload<N> {
+    type Output = Value;
+
+    fn visit<W: Workload>(self) -> Value {
+        let spec = self.spec;
+        let header = json!({
+            "backend": N::NAME,
+            "crate": N::CRATE,
+            "workload": W::NAME,
+            "op": format!("{:?}", spec.op),
+            "form": format!("{:?}", spec.form),
+            "arrival": spec.arrival.name(),
+        });
+        let mut output = match (spec.op, spec.form) {
+            _ if W::native().is_none() => json!({
+                "verdict": "unsupported",
+                "detail": "the native formats do not carry this workload",
+            }),
+            // The native derives have no borrowing form here: prost has none.
+            (Op::Decode, Form::Borrowed) => json!({
+                "verdict": "unsupported",
+                "detail": "no borrowed form",
+            }),
+            (Op::Decode, Form::Owned) => modes::run(&spec, &mut NativeDecode::<N, W>::new(spec.arrival)),
+            (Op::Encode | Op::EncodeInto, _) if W::EXPECT != Expect::Value => json!({
+                "verdict": "unsupported",
+                "detail": "decode-only workload: its bytes must be refused",
+            }),
+            (Op::Encode, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(false)),
+            (Op::EncodeInto, _) => modes::run(&spec, &mut NativeEncode::<N, W>::new(true)),
+        };
+        if let (Value::Object(out), Value::Object(head)) = (&mut output, header) {
+            out.extend(head);
+        }
+        output
+    }
+}
+
+/// What `backend` writes for `workload`'s value, or `None` if this build has
+/// neither, or the backend cannot encode it: the bytes the wire-size axis
+/// measures.
+pub fn dump(backend: &str, workload: &str) -> Option<Result<Vec<u8>, String>> {
+    struct Serde<'a>(&'a str);
+    impl codecs::Visit for Serde<'_> {
+        type Output = Option<Result<Vec<u8>, String>>;
+        fn visit<B: Backend>(self) -> Self::Output {
+            struct W<B>(PhantomData<B>);
+            impl<B: Backend> payloads::Visit for W<B> {
+                type Output = Result<Vec<u8>, String>;
+                fn visit<W: Workload>(self) -> Self::Output {
+                    B::encode(&W::value()).map_err(|e| e.to_string())
+                }
+            }
+            payloads::dispatch(self.0, W::<B>(PhantomData))
+        }
+    }
+    struct Natively<'a>(&'a str);
+    impl codecs::VisitNative for Natively<'_> {
+        type Output = Option<Result<Vec<u8>, String>>;
+        fn visit<N: Native>(self) -> Self::Output {
+            struct W<N>(PhantomData<N>);
+            impl<N: Native> payloads::Visit for W<N> {
+                type Output = Result<Vec<u8>, String>;
+                fn visit<W: Workload>(self) -> Self::Output {
+                    let value = W::native().ok_or("the native formats do not carry this workload")?;
+                    N::encode(&value).map_err(|e| e.to_string())
+                }
+            }
+            payloads::dispatch(self.0, W::<N>(PhantomData))
+        }
+    }
+    codecs::dispatch(backend, Serde(workload))
+        .or_else(|| codecs::dispatch_native(backend, Natively(workload)))
+        .flatten()
+}
+
+/// The inputs a decode consumes.
+struct Inputs {
+    arrival: Arrival,
+    /// For `Shared`: every input is a clone of this, which shares its
+    /// allocation with `_rest` exactly as a single frame shares a connection
+    /// buffer. For `Unique`: the source copies are made from.
+    template: Bytes,
+    _rest: Option<Bytes>,
+    pool: Vec<Bytes>,
+}
+
+impl Inputs {
+    fn new(arrival: Arrival, bytes: &[u8]) -> Self {
+        let (template, rest) = arrival.materialize(bytes);
+        Self {
+            arrival,
+            template,
+            _rest: rest,
+            pool: Vec::new(),
+        }
+    }
+
+    fn prepare(&mut self, n: u64) {
+        if self.arrival == Arrival::Unique {
+            self.pool.clear();
+            self.pool.extend((0..n).map(|_| Bytes::from(self.template.to_vec())));
+        }
+    }
+
+    fn next(&mut self) -> Bytes {
+        match self.arrival {
+            Arrival::Shared => self.template.clone(),
+            Arrival::Unique => self
+                .pool
+                .pop()
+                .unwrap_or_else(|| unreachable!("prepare() sized the pool")),
+        }
+    }
+}
+
+struct DecodeOwned<B, W> {
+    inputs: Inputs,
+    size: usize,
+    _p: PhantomData<(B, W)>,
+}
+
+impl<B: Backend, W: Workload> DecodeOwned<B, W> {
+    fn new(arrival: Arrival) -> Self {
+        let bytes = W::bytes(B::FORMAT);
+        Self {
+            size: bytes.len(),
+            inputs: Inputs::new(arrival, &bytes),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<B: Backend, W: Workload> Job for DecodeOwned<B, W> {
+    fn prepare(&mut self, n: u64) {
+        self.inputs.prepare(n);
+    }
+
+    fn run(&mut self) {
+        let input = self.inputs.next();
+        let _ = black_box(B::decode::<W::Owned>(black_box(input)));
+    }
+
+    fn verify(&mut self) -> Verdict {
+        self.prepare(1);
+        judge_decode::<W, _>(B::FORMAT, B::decode::<W::Owned>(self.inputs.next()))
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+struct DecodeBorrowed<B, W> {
+    inputs: Inputs,
+    size: usize,
+    _p: PhantomData<(B, W)>,
+}
+
+impl<B: Backend, W: Workload> DecodeBorrowed<B, W> {
+    fn new(arrival: Arrival) -> Self {
+        let bytes = W::bytes(B::FORMAT);
+        Self {
+            size: bytes.len(),
+            inputs: Inputs::new(arrival, &bytes),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<B: Backend, W: Workload> Job for DecodeBorrowed<B, W> {
+    fn prepare(&mut self, n: u64) {
+        self.inputs.prepare(n);
+    }
+
+    fn run(&mut self) {
+        let mut body = Body::new(black_box(self.inputs.next()));
+        let _ = black_box(B::decode_borrowed::<W::Borrowed<'_>>(&mut body));
+    }
+
+    fn verify(&mut self) -> Verdict {
+        self.prepare(1);
+        let mut body = Body::new(self.inputs.next());
+        judge_decode::<W, _>(B::FORMAT, B::decode_borrowed::<W::Borrowed<'_>>(&mut body))
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+struct Encode<B, W: Workload> {
+    value: W::Owned,
+    into: bool,
+    out: Vec<u8>,
+    /// The reference encoding of the value in `B`'s format.
+    reference: Vec<u8>,
+    _p: PhantomData<B>,
+}
+
+impl<B: Backend, W: Workload> Encode<B, W> {
+    fn new(into: bool) -> Self {
+        let value = W::value();
+        Self {
+            reference: payloads::encode(B::FORMAT, &value),
+            value,
+            into,
+            out: Vec::new(),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<B: Backend, W: Workload> Job for Encode<B, W> {
+    fn prepare(&mut self, _: u64) {
+        if self.into && self.out.capacity() < self.reference.len() {
+            self.out.reserve(self.reference.len() * 2);
+        }
+    }
+
+    fn run(&mut self) {
+        if self.into {
+            let _ = black_box(B::encode_into(black_box(&self.value), &mut self.out));
+        } else {
+            let _ = black_box(B::encode(black_box(&self.value)));
+        }
+    }
+
+    fn verify(&mut self) -> Verdict {
+        let encoded = if self.into {
+            self.prepare(1);
+            B::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
+        } else {
+            B::encode(&self.value)
+        };
+        match encoded {
+            Ok(bytes) => judge_encoding::<W>(B::FORMAT, &bytes, &self.reference),
+            Err(failure) => Verdict::Rejected(failure.to_string()),
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.reference.len()
+    }
+}
+
+struct NativeDecode<N, W> {
+    inputs: Inputs,
+    size: usize,
+    _p: PhantomData<(N, W)>,
+}
+
+impl<N: Native, W: Workload> NativeDecode<N, W> {
+    fn new(arrival: Arrival) -> Self {
+        let bytes = W::bytes(N::FORMAT);
+        Self {
+            size: bytes.len(),
+            inputs: Inputs::new(arrival, &bytes),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<N: Native, W: Workload> Job for NativeDecode<N, W> {
+    fn prepare(&mut self, n: u64) {
+        self.inputs.prepare(n);
+    }
+
+    fn run(&mut self) {
+        let input = self.inputs.next();
+        let _ = black_box(N::decode::<W::Native>(black_box(input)));
+    }
+
+    fn verify(&mut self) -> Verdict {
+        self.prepare(1);
+        judge_native::<W>(N::decode::<W::Native>(self.inputs.next()))
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+}
+
+struct NativeEncode<N, W: Workload> {
+    value: W::Native,
+    into: bool,
+    out: Vec<u8>,
+    reference: Vec<u8>,
+    _p: PhantomData<N>,
+}
+
+impl<N: Native, W: Workload> NativeEncode<N, W> {
+    fn new(into: bool) -> Self {
+        let value = W::native().unwrap_or_else(|| unreachable!("checked by the caller"));
+        Self {
+            reference: payloads::encode_native(N::FORMAT, &value),
+            value,
+            into,
+            out: Vec::new(),
+            _p: PhantomData,
+        }
+    }
+}
+
+impl<N: Native, W: Workload> Job for NativeEncode<N, W> {
+    fn prepare(&mut self, _: u64) {
+        if self.into && self.out.capacity() < self.reference.len() {
+            self.out.reserve(self.reference.len() * 2);
+        }
+    }
+
+    fn run(&mut self) {
+        if self.into {
+            let _ = black_box(N::encode_into(black_box(&self.value), &mut self.out));
+        } else {
+            let _ = black_box(N::encode(black_box(&self.value)));
+        }
+    }
+
+    fn verify(&mut self) -> Verdict {
+        let encoded = if self.into {
+            self.prepare(1);
+            N::encode_into(&self.value, &mut self.out).map(|()| self.out.clone())
+        } else {
+            N::encode(&self.value)
+        };
+        match encoded {
+            Ok(bytes) => judge_encoding::<W>(N::FORMAT, &bytes, &self.reference),
+            Err(failure) => Verdict::Rejected(failure.to_string()),
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.reference.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use codecs::backend::serde_json::SerdeJson;
+    use codecs::{Class, Failure, Format, Trailing, Visit};
+    use payloads::families::Defaults;
+    use payloads::reject::{RejectShape, RejectTruncated};
+    use serde::{Deserialize, Serialize, de::DeserializeOwned};
+
+    use super::*;
+
+    /// serde_json, but every refusal is answered 400: blind to the shape
+    /// errors a server answers 422.
+    #[derive(Debug)]
+    struct StatusBlind;
+
+    fn blind(failure: Failure) -> Failure {
+        Failure::new(Class::Syntax, failure.message)
+    }
+
+    impl Backend for StatusBlind {
+        const NAME: &'static str = "status-blind";
+        const CRATE: &'static str = "serde_json";
+        const FORMAT: Format = Format::Json;
+        const ENCODES: bool = true;
+        const ELIGIBLE: bool = false;
+        const TRAILING: Trailing = Trailing::Refused;
+
+        fn decode<T: DeserializeOwned>(body: Bytes) -> Result<T, Failure> {
+            SerdeJson::decode(body).map_err(blind)
+        }
+
+        fn decode_borrowed<'a, T: Deserialize<'a>>(body: &'a mut Body) -> Result<T, Failure> {
+            SerdeJson::decode_borrowed(body).map_err(blind)
+        }
+
+        fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, Failure> {
+            SerdeJson::encode(value)
+        }
+
+        fn encode_into<T: Serialize>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure> {
+            SerdeJson::encode_into(value, out)
+        }
+
+        fn to_writer<T: Serialize, W: std::io::Write>(value: &T, out: W) -> Result<(), Failure> {
+            SerdeJson::to_writer(value, out)
+        }
+    }
+
+    /// What the `cell` binary prints for `mode` on backend `B`.
+    fn cell<B: Backend>(mode: &str, op: Op, form: Form, workload: &str) -> Value {
+        ByBackend {
+            spec: Spec {
+                mode: mode.to_owned(),
+                op,
+                form,
+                arrival: Arrival::Shared,
+                iters: Some(2),
+            },
+            workload,
+        }
+        .visit::<B>()
+        .unwrap_or_else(|| panic!("no workload {workload}"))
+    }
+
+    #[test]
+    fn a_refusal_with_the_expected_status_is_exact_and_measured() {
+        for workload in [RejectTruncated::NAME, RejectShape::NAME] {
+            for form in [Form::Owned, Form::Borrowed] {
+                for mode in ["check", "callgrind", "alloc"] {
+                    let out = cell::<SerdeJson>(mode, Op::Decode, form, workload);
+                    assert_eq!(out["verdict"], "exact", "{workload} {form:?} {mode}: {out}");
+                    assert_eq!(out["iters"], 2, "{workload} {form:?} {mode}: {out}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn another_status_is_wrong_and_not_measured() {
+        for mode in ["check", "callgrind", "alloc", "hw", "time"] {
+            for form in [Form::Owned, Form::Borrowed] {
+                let out = cell::<StatusBlind>(mode, Op::Decode, form, RejectShape::NAME);
+                assert_eq!(out["verdict"], "wrong", "{mode} {form:?}: {out}");
+                assert!(out.get("iters").is_none(), "{mode} {form:?} was measured: {out}");
+                let detail = out["detail"].as_str().unwrap_or_default();
+                assert!(detail.starts_with("answered 400, expected 422"), "{detail}");
+            }
+        }
+        // Where 400 is the expected answer, the same backend is right.
+        let out = cell::<StatusBlind>("check", Op::Decode, Form::Owned, RejectTruncated::NAME);
+        assert_eq!(out["verdict"], "exact", "{out}");
+    }
+
+    #[test]
+    fn a_body_that_must_be_refused_has_no_encode() {
+        for op in [Op::Encode, Op::EncodeInto] {
+            for workload in [RejectTruncated::NAME, RejectShape::NAME] {
+                let out = cell::<SerdeJson>("check", op, Form::Owned, workload);
+                assert_eq!(out["verdict"], "unsupported", "{workload} {op:?}: {out}");
+                assert!(out.get("iters").is_none(), "{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn prost_measures_what_it_carries_and_refuses_nothing_else_silently() {
+        use codecs::VisitNative;
+        use codecs::native::prost::Prost;
+        let native = |op, workload: &str| {
+            ByNative {
+                spec: Spec {
+                    mode: "check".into(),
+                    op,
+                    form: Form::Owned,
+                    arrival: Arrival::Shared,
+                    iters: Some(2),
+                },
+                workload,
+            }
+            .visit::<Prost>()
+            .unwrap_or_else(|| panic!("no workload {workload}"))
+        };
+        for op in [Op::Decode, Op::Encode, Op::EncodeInto] {
+            let out = native(op, "json-large");
+            assert_eq!(out["verdict"], "exact", "{op:?}: {out}");
+        }
+        assert_eq!(native(Op::Decode, RejectTruncated::NAME)["verdict"], "exact");
+        assert_eq!(native(Op::Decode, "enums")["verdict"], "unsupported");
+        assert_eq!(dump("prost", "json-small").map(|b| b.map(|b| b.len())), Some(Ok(48)));
+    }
+
+    /// The encode is judged against the value's own encoding, which writes
+    /// every member, not against the input, which omits half of them.
+    #[test]
+    fn defaults_encode_every_member_and_still_match_the_value() {
+        let out = cell::<SerdeJson>("check", Op::Encode, Form::Owned, Defaults::NAME);
+        assert_eq!(out["verdict"], "exact", "{out}");
+        let input = Defaults::bytes(Format::Json).len();
+        assert!(out["size"].as_u64().is_some_and(|size| size as usize > input), "{out}");
+    }
+}
