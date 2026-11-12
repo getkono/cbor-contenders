@@ -46,7 +46,7 @@ impl Op {
 pub enum Form {
     /// `String` fields.
     Owned,
-    /// `Cow<'de, str>` fields.
+    /// `&'de str` and `&'de [u8]` fields, borrowing from the body.
     Borrowed,
 }
 

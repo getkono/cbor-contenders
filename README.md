@@ -8,7 +8,7 @@ A server that takes typed JSON bodies can take CBOR (RFC 8949) as well: the same
 
 It is the harness kynos [#989](https://github.com/getkono/kynos/issues/989) specifies, delivered as [#999](https://github.com/getkono/kynos/issues/999). The repository also holds the worked outside codec #988 makes possible: a `BodyCodec` for `application/cbor` that Kynos mounts through `Encoded<C, T>`, written to the codec trust model and tested through Kynos ([`crates/kynos-cbor`](crates/kynos-cbor/src/lib.rs)).
 
-This README holds the method and the commentary. Every measured number, table and figure is generated from `results/` into [`report/`](report/README.md) by `cargo xtask report`; nothing in this file is a measurement the report does not show. The infrastructure is getkono/serde-json-contenders', taken at `7c4e50f` and adapted: workspace, provenance, container counts, timed protocol, footprint and report checks.
+This README holds the method and the commentary. Every measured number, table and figure is generated from `results/` into [`report/`](report/README.md) by `cargo xtask report`; nothing in this file is a measurement the report does not show. The infrastructure is getkono/serde-json-contenders', taken at [`7c4e50f`](https://github.com/getkono/serde-json-contenders/commit/7c4e50f557e7ec44db2b33e8f16e1540ee9eb252) (its `main`, 2026-11-08) and adapted: workspace, provenance, container counts, timed protocol, footprint and report checks.
 
 ## Contents
 
@@ -22,7 +22,7 @@ This README holds the method and the commentary. Every measured number, table an
 
 ## Findings
 
-Pending the first measurement: `results/` holds no measured file yet, so the [report](report/README.md#verdict) shows only the decision rule's first clause. That clause is settled outside this repository: kynos #998 found no written use case that an outside `BodyCodec` cannot serve, so CBOR is not admitted in-tree whatever the measurements show. The rest of the rule is computed from the results once `mise run all` has run on a quiet host.
+Pending the first measurement: `results/` holds no measured file yet. The [report](report/README.md#verdict) shows all five clauses for every candidate. Clause 1 fails for each: it is settled outside this repository, since kynos #998 found no written use case that an outside `BodyCodec` cannot serve, so CBOR is not admitted in-tree whatever the measurements show. Two more failures need no measurement: minicbor's derive fails clause 3 by construction, and ciborium fails clause 4, having had no release or code change in the twelve months before `results/maintenance.toml`'s date. Every other clause is pending until `mise run all` has run on a quiet host.
 
 ## Scope
 
@@ -79,20 +79,20 @@ Each adapter maps its library's errors as faithfully as the error type allows, a
 
 ### Builds
 
-- **One set per candidate.** Each candidate crate is built in a set of its own, always beside the baselines and the oracle. A build in which a crate every set shares (serde_json, prost, bytes) resolves other features than the baseline build does is refused.
+- **One set per candidate.** Each candidate crate is built in a set of its own, always beside the baselines and the oracle. A build in which a crate every set shares (serde, serde_json, prost, bytes) resolves other features than the baseline build does is refused. serde's `alloc`, which four candidates turn on and which does nothing beside `std`, is no difference.
 - **Profile and compiler.** Every build uses Kynos's profile (`lto = "fat"`, `codegen-units = 1`, `panic = "unwind"`, line tables only) on Rust 1.97.1, the toolchain Kynos's `mise.toml` pins.
-- **Variants.** There are two: `portable` (`-C target-cpu=x86-64`), which decides because #989's rule asks for the frontier "at a portable build", and `native`, for information. No CBOR candidate selects a SIMD path, so there is no intermediate level to tell apart. `cargo xtask doctor` checks that each build was compiled for its variant's target features.
+- **Variants.** There are two: `portable` (`-C target-cpu=x86-64`), which decides because #989's rule asks for the frontier "at a portable build", and `native`, for information. No CBOR candidate selects a SIMD path, so there is no intermediate level to tell apart. `cargo xtask doctor` checks that each measured build was compiled for its variant's target features: every `cell` (asked what it compiled, feature by feature), and the conformance suite, the end-to-end server and each size fixture (from the flags cargo recorded for each measured binary).
 
 ### Axes
 
 | # | Axis (#989 section 2) | Instrument |
 | --- | --- | --- |
-| 1 | Decode CPU | hardware `cycles:u` at `portable`, pinned, in shuffled rounds with an A/A copy of each baseline: this decides. callgrind estimated cycles (`Ir + 5·L1 misses + 35·LL misses`, fixed cache geometry) at the same build corroborate it and reproduce exactly. Wall-clock time is recorded for information |
-| 2 | Encode CPU | the same |
-| 3 | Heap | a counting global allocator in a build of its own: allocations, reallocations, bytes, peak per operation |
-| 4 | Encoded size | each entry's own encoding of each workload's value: raw, gzip level 6, zstd level 3 |
-| 5 | `.text` | a fixture that decodes and re-encodes the two Kynos body types, minus the same program without a codec. It mounts the codec and the types, not a Kynos server: every CBOR codec reaches Kynos through the same `Encoded<C, T>`, so Kynos's per-codec glue is the same for each |
-| 6 | Compile time and MSRV | clean and incremental builds of that fixture (median of five; adoption context, not an axis), and whether each adapter builds on Rust 1.85, Kynos's MSRV |
+| 1 | Decode CPU | hardware `cycles:u` at `portable`, pinned, in shuffled rounds with an A/A copy of each baseline: this decides. callgrind estimated cycles (`Ir + 5·L1 misses + 35·LL misses`, fixed cache geometry) at the same build corroborate it and reproduce exactly. Wall-clock time and hardware instructions are reported beside them, for information |
+| 2 | Encode CPU | the same, for the encode Kynos does (`encode-writer`, under What a backend must do) |
+| 3 | Heap | a counting global allocator in a build of its own: allocations, reallocations, bytes, peak and leaked bytes per operation. Blocks (allocations) and bytes are each an axis of clause 2 |
+| 4 | Encoded size | each entry's own encoding of each workload's value: raw, gzip level 6, zstd level 3, each an axis of clause 2 |
+| 5 | `.text` | a fixture that decodes and re-encodes the two Kynos body types, minus the same program without a codec. It mounts the codec and the types, not a Kynos server: every CBOR codec reaches Kynos through the same `Encoded<C, T>`, so Kynos's per-codec glue is the same for each. The fixture depends on the library alone (not on `crates/codecs`, which always links the baselines and the oracle) and calls it as its adapter does |
+| 6 | Compile time and MSRV | clean and incremental builds of that fixture (median of five), and whether each adapter and the worked codec build on Rust 1.85, Kynos's MSRV. The baseline set is the control: a candidate fails only where it builds |
 | 7 | `unsafe` and soundness | a `syn`-based count of every `unsafe` block, fn, impl and trait in every runtime crate a candidate adds (serde-json-contenders' replacement for cargo-geiger); RustSec advisories at a pinned advisory-db commit; open soundness issues reviewed by hand (`results/soundness.toml`) |
 | 8 | Conformance | the suite below: a gate, not a trade-off |
 
@@ -114,7 +114,8 @@ Notes:
 
 - **Dropped workloads.** serde-json-contenders' JSON-text workloads (escapes, pretty-printing, `\u` escapes) have no CBOR meaning and are dropped.
 - **Protobuf and minicbor's derive** carry the workloads whose shape they can. A root list becomes a one-field message, since a protobuf message cannot be a bare list. Every other workload is not measured for them, and the matrix says so.
-- **Arrivals.** Decode input arrives as one frame sharing a larger buffer (`shared`, as hyper hands out a single-frame body) or as a fresh buffer (`unique`, a collected multi-frame body).
+- **Arrivals.** Decode input arrives as one frame sharing a larger buffer (`shared`, as hyper hands out a single-frame body) or as a fresh buffer of its own (`unique`). A body that came in several frames is modelled as `unique`: the one buffer Kynos collects them into, not the frames themselves.
+- **The borrowing forms** use `&'de str` and `&'de [u8]` (through `serde_bytes`) directly, in `Vec`, `Option` and map keys too. serde borrows only into a field that is directly one of those or a `Cow`, and a `Cow` inside a container copies. A library that cannot borrow is recorded as not borrowing, not gated: Kynos's `BodyCodec` decodes `DeserializeOwned`.
 
 ### Conformance
 
@@ -151,7 +152,7 @@ Beyond the suite:
   - arbitrary bytes into an attribute-heavy struct, owned and borrowed;
   - arbitrary values round-tripped.
 
-  A divergence is an ill-formed body accepted, as judged by `faithful::well_formed`, which shares no code with any candidate. A value that differs from the oracle's is one too. The minimized corpus of every run is committed under `results/fuzz-corpus/`.
+  A divergence is an ill-formed body accepted, as judged by `faithful::well_formed`, which shares no code with any candidate. A value that differs from the oracle's is one too, and so is any crash. A memory error AddressSanitizer reports is a divergence (clause 3) and unsoundness (clause 4). The minimized corpus of every run is committed under `results/fuzz-corpus/`.
 - **Miri** runs a slice of the suite wherever a candidate's code allows. Where it cannot run (`unsupported`), clause 3 stays pending.
 
 ### The JSON data model (#989 section 5)
@@ -171,7 +172,7 @@ It also records what the worked codec answers. The worked codec's rules, in `cra
 
 | Body | Answer | Why |
 | --- | --- | --- |
-| ill-formed (section 5.1), invalid UTF-8, bytes after the item, nested deeper than 128 | 400 | not a valid CBOR item; 128 is the depth `Json<T>` refuses past |
+| ill-formed (section 5.1), invalid UTF-8, bytes after the item, nested 128 levels deep or deeper | 400 | not a valid CBOR item; `Json<T>` accepts 127 levels and refuses the 128th (serde_json's recursion limit), and so does the codec |
 | a byte string | 422 | JSON has no bytes; Kynos describes `Vec<u8>` as an array of integers, and a `contentEncoding: base64` string is text, not a byte string |
 | any tag | 422 | no JSON Schema form; a decoder that ignored it would accept a value the schema does not describe |
 | `undefined`, simple values other than `false`, `true`, `null` | 422 | no JSON value |
@@ -182,9 +183,17 @@ It also records what the worked codec answers. The worked codec's rules, in `cra
 
 On encode, a byte string, a non-finite float, an `i128`/`u128` and a non-string map key are refused, which Kynos answers 500. The cost of the scan is inside every end-to-end figure for a CBOR entry.
 
+The codec presents `T` with a human-readable serde view (`is_human_readable() == true`) both ways, as `Json<T>` does. So the types Kynos describes as formatted strings use their string forms, as Kynos's schema for them says: `Uuid`, `Ipv4Addr`, `Ipv6Addr` and `IpAddr`, chrono's and jiff's date-times, `rust_decimal::Decimal` and `BigDecimal`. Bare, a library would write some of them as byte strings or arrays, which the schema does not describe. For the same reason the codec refuses an array where `T` is a struct (`[7, "seven"]` for `{id, name}`), as `Json<T>` does: a schema object is not an array.
+
 ### End to end
 
-`crates/e2e` is a Kynos server (kynos 0.5.0 from crates.io) with kynos-bench's four routes: `POST /echo`, `GET /json/large`, `POST /json/large` (204) and `GET /json/small`. kynos-bench itself cannot swap the codec under a route, and is private. Each entry carries its bodies the way an application would:
+`crates/e2e` is a Kynos server (kynos 0.5.0 from crates.io) on kynos-bench's paths and bodies, with four routes: `POST /echo`, `GET /json/large`, `POST /json/large` (204) and `GET /json/small`. kynos-bench itself cannot swap the codec under a route, and is private. The routes depart from it where a codec comparison needs them to:
+
+- **The GETs encode.** kynos-bench's GETs answer with bytes it encoded once at start-up, which here is the floor below. Here each GET encodes its value per request, so the encode is measured end to end.
+- **`POST /json/large` is added.** kynos-bench has none. It decodes the large body and answers 204, so the decode of a large body is measured end to end without an encode beside it.
+- **The echo answers a bad checksum differently.** kynos-bench answers an echo whose checksum does not match its payload with a 400. Here it is echoed with the checksum zeroed, a body the verifier refuses as a wrong answer. A codec that misread the payload is thus a wrong answer, and never a fast 400.
+
+Each entry carries its bodies the way an application would:
 
 - `Json<T>` for serde_json;
 - `Protobuf<T>` for prost;
@@ -195,7 +204,7 @@ Each format has a floor: the same server reading `Binary<M>` under the same medi
 - **Counted** runs go through `Server::serve_io` over an in-memory pipe under callgrind, at `portable`.
 - **Timed** runs go over loopback with oha 1.16.0. Closed-loop throughput is taken at 64 connections, then open-loop p99 at 70 % of serde_json's throughput. Five reps run in shuffled order, with A/A copies of both baselines.
 
-#989 section 6's cross-check is the report's: a large timed gain where the counted share is small is a measurement error to explain, not a result.
+#989 section 6's cross-check is computed in the report. For each CBOR entry and route, serde_json's counted codec share `s` against the entry's floor bounds what any codec can gain: at most `1 ÷ (1 − s)` of serde_json's throughput, the speedup if the entry's codec cost nothing. A timed gain beyond that bound, and beyond serde_json's A/A band, is a measurement error to explain, not a result. It holds the entry's clause 2 pending, since clause 2's cycles come from the same host's timing.
 
 ### Decision rule (#989 section 7)
 
@@ -203,12 +212,16 @@ CBOR is admitted in-tree only if all five hold, per candidate (`xtask/src/report
 
 1. **A written use case an outside `BodyCodec` cannot serve.** Settled by kynos #998: there is none. The report states it and computes nothing.
 2. **The frontier.**
-   - **The win.** On at least one of axes 1 to 4, at a Kynos workload and the server's own shape (owned decode of a shared frame; the encode Kynos does, `encode-writer`: `to_writer` into its `BodyWriter`, or `encode_to_vec` for prost), the candidate is more than the margin better than both serde_json and prost, at `portable`.
+   - **The win.** On at least one of axes 1 to 4 (decode and encode cycles; heap blocks and bytes per decode and per encode; encoded size raw, gzip and zstd: nine axes, each on its own), at a Kynos workload and the server's own shape (owned decode of a shared frame; the encode Kynos does, `encode-writer`: `to_writer` into its `BodyWriter`, or `encode_to_vec` for prost), the candidate is more than the margin better than both serde_json and prost, at `portable`.
    - **The margin.** It is ε = 5 %, or on a cycles axis the A/A band at that cell where wider.
    - **Counts must agree.** A cycles advantage counts only where callgrind's estimated cycles at the same build point the same way.
-3. **No silent conformance difference.** The suite's gate at every variant, and no wrong answer in any measured cell or end-to-end route. There must also be no fuzz divergence and no undefined behaviour under Miri. The worked codec's profile must hold on every `model` case. minicbor's derive fails here by construction: it has no faithful schema.
-4. **Soundness.** No open soundness issue, and no advisory affecting the pinned version of any crate a candidate adds. The crate must also be maintained: a release or substantive commit within twelve months of `results/maintenance.toml`'s date.
-5. **Licence.** The licence of every runtime crate a candidate adds must be on Kynos's `deny.toml` allow list, vendored as `references/kynos-deny-allow.txt`. BlueOak-1.0.0 (minicbor) is not on it, as #989's outcome comment records.
+   - **Trust.** A cycles win taken at `solo` trust is provisional, and leaves the clause pending until a `canonical` run measures it. So does a win beyond ε that only a `solo` A/A band hides. A heap or size win is deterministic, and settles the clause at either trust.
+   - **This harness's reading of "the frontier".** #989 asks for a candidate "on the Pareto frontier on at least one axis". The harness reads that as an ε-win on one axis: better than both serde_json and prost by more than the margin, on one axis, at one Kynos workload. It does not compute a frontier over all axes jointly. This was decided for this harness, so that clause 2 is a test against the two formats a server already has, not a ranking of the candidates.
+3. **No silent conformance difference.** The suite's gate at every variant, and no wrong answer in any measured cell (counted, heap, hardware or timed) or end-to-end route. There must also be no fuzz divergence and no undefined behaviour under Miri. The worked codec's profile must hold on every `model` case. minicbor's derive fails here by construction: it has no faithful schema.
+   - **A refused valid body is a wrong answer.** A cell whose library refused a workload the oracle decodes, or would not encode its value, fails the clause. There are two exceptions, recorded rather than gated. One is an operation the library does not have, such as a borrowing decode. The other is a 400 on a `nested-N` workload at least 128 levels deep, which `Json<T>` refuses too: a depth limit RFC 8949 leaves to the implementation.
+   - **Evidence, not absence.** The clause passes only when every source it reads holds the candidate's rows: the conformance runs, all four per-operation tables, both end-to-end files, every fuzz target and Miri. A stage that did not run, or that `results/skipped.toml` excuses, leaves the clause pending, never passed.
+4. **Soundness.** No open soundness issue, and no memory error found while fuzzing. No advisory may affect the pinned version of any crate a candidate adds, whatever its kind: RustSec files unsoundness as `informational = "unsound"`. The crate must also be maintained: a release, or a commit that changes its code, within twelve months of `results/maintenance.toml`'s date. A commit that touches only CI, documentation, the README or the declared minimum Rust does not count. By that reading ciborium, whose last code change is 2025-08-02, is not maintained. A failure found stands even where other evidence is missing.
+5. **Licence.** The licence of every runtime crate a candidate adds must be on Kynos's `deny.toml` allow list, vendored as `references/kynos-deny-allow.txt`. BlueOak-1.0.0 (minicbor) is not on it, as #989's outcome comment records. An expression is read as SPDX reads it: `AND` binds tighter than `OR`, parentheses group, and `X WITH Y` must be on the list whole.
 
 Each clause is pass, fail or pending, with its reason, in the report and `report/verdict.json`.
 
@@ -262,7 +275,7 @@ cargo xtask report                    # regenerate report/ from results/
 cargo xtask report --check
 ```
 
-`mise run all` without `CC_TRUST=canonical` takes `solo`-trust timing on a busy host, which the report marks provisional. Individual tasks are listed by `cargo xtask`. A stage that cannot run on a host is declared, with its reason, in `results/skipped.toml`, and the report states it.
+`mise run all` without `CC_TRUST=canonical` takes `solo`-trust timing on a busy host. The report marks it provisional, and a cycles win taken at it leaves clause 2 pending. Individual tasks are listed by `cargo xtask`. A stage that cannot run on a host is declared, with its reason, in `results/skipped.toml`, and the report states it.
 
 ## Licence
 
