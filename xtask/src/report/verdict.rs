@@ -570,7 +570,7 @@ fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
     {
         Some(open) if !open.is_empty() => failures.push(format!("{} open soundness issues", open.len())),
         Some(_) => {}
-        None => pending.push("no reviewed `open` list in soundness.toml"),
+        None => pending.push("no reviewed `open` list in soundness.toml".into()),
     }
     // A memory error AddressSanitizer caught while fuzzing is unsoundness in
     // the code the candidate adds (the fuzz targets and the oracle are safe
@@ -589,8 +589,28 @@ fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
     if !sanitized.is_empty() {
         failures.push(sanitized.join(", "));
     }
+    // "No memory error found while fuzzing" needs the fuzzing: every run the
+    // set gets, to its end.
+    let unfuzzed: Vec<String> = crate::matrix::set(set)
+        .map(crate::fuzzing::runs)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|&(_, backend, config, _, target)| {
+            !data.fuzz.iter().any(|r| {
+                r["set"] == set
+                    && r["backend"] == backend
+                    && r["config"] == config
+                    && r["target"] == target
+                    && r["finished"] == true
+            })
+        })
+        .map(|(_, backend, config, _, target)| format!("fuzzing {backend} {config} {target}"))
+        .collect();
+    if !unfuzzed.is_empty() {
+        pending.push(format!("not run to its end: {}", unfuzzed.join(", ")));
+    }
     match data.footprint.iter().find(|r| r["set"] == set && r["crate"] == krate) {
-        None => pending.push("no footprint"),
+        None => pending.push("no footprint".into()),
         Some(row) => {
             let advisories: Vec<String> = row["crates"]
                 .as_array()
@@ -617,7 +637,7 @@ fn soundness(data: &Data, krate: &str, set: &str) -> Clause {
     match maintained(data, krate) {
         Some(true) => {}
         Some(false) => failures.push("no release or code change within twelve months".into()),
-        None => pending.push("no maintenance.toml entry"),
+        None => pending.push("no maintenance.toml entry".into()),
     }
     if !failures.is_empty() {
         Clause::Fail(failures.join("; "))
@@ -808,6 +828,18 @@ mod tests {
             ] }] })
         };
         data.footprint = vec![advisory(false)];
+        // Nothing found, but nothing fuzzed: not yet a pass.
+        let c4 = soundness(&data, "ciborium", "ciborium");
+        assert!(
+            matches!(&c4, Clause::Pending(why) if why.contains("fuzzing ciborium portable decode_value")),
+            "{c4:?}"
+        );
+        for target in crate::fuzzing::FUZZ_TARGETS {
+            data.fuzz.push(json!({
+                "set": "ciborium", "backend": "ciborium", "config": "portable", "target": target,
+                "finished": true, "divergence_found": false, "sanitizer_report": null,
+            }));
+        }
         assert_eq!(soundness(&data, "ciborium", "ciborium").word(), "pass");
         data.footprint = vec![advisory(true)];
         let c4 = soundness(&data, "ciborium", "ciborium");

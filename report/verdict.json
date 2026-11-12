@@ -54,7 +54,7 @@
         {
           "clause": 4,
           "outcome": "pending",
-          "why": "no footprint"
+          "why": "not run to its end: fuzzing minicbor-serde portable decode_value, fuzzing minicbor-serde portable decode_struct, fuzzing minicbor-serde portable roundtrip; no footprint"
         },
         {
           "clause": 5,
@@ -118,7 +118,7 @@
         {
           "clause": 4,
           "outcome": "pending",
-          "why": "no footprint"
+          "why": "not run to its end: fuzzing cbor4ii portable decode_value, fuzzing cbor4ii portable decode_struct, fuzzing cbor4ii portable roundtrip; no footprint"
         },
         {
           "clause": 5,
@@ -150,7 +150,7 @@
         {
           "clause": 4,
           "outcome": "pending",
-          "why": "no footprint"
+          "why": "not run to its end: fuzzing cbor2 portable decode_value, fuzzing cbor2 portable decode_struct, fuzzing cbor2 portable roundtrip; no footprint"
         },
         {
           "clause": 5,
@@ -182,7 +182,7 @@
         {
           "clause": 4,
           "outcome": "pending",
-          "why": "no footprint"
+          "why": "not run to its end: fuzzing c2pa_cbor portable decode_value, fuzzing c2pa_cbor portable decode_struct, fuzzing c2pa_cbor portable roundtrip; no footprint"
         },
         {
           "clause": 5,
