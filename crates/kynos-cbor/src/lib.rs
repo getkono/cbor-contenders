@@ -26,8 +26,9 @@
 //! | Body | Status | Where |
 //! | --- | --- | --- |
 //! | Another `Content-Type`, too large, under a content coding | 415, 413, 415 | Kynos, before the codec |
-//! | Not a valid CBOR item (ill-formed, invalid UTF-8, bytes after it, too deep) | 400 | [`faithful::scan`] |
-//! | A valid item the JSON data model has no place for (byte string, tag, `undefined`, NaN, non-text key, repeated key) | 422 | [`faithful::scan`] |
+//! | Not a valid CBOR item anywhere (ill-formed, a tag with no content, invalid UTF-8, bytes after it, more than 127 levels), even after a value the data model refuses | 400 | [`faithful::scan`] |
+//! | A valid item the JSON data model has no place for (byte string, tag, `undefined` or another simple value, NaN, non-text key, repeated key) | 422 | [`faithful::scan`] |
+//! | A struct read from an array | 422 | [`faithful::Profiled`] |
 //! | A valid item of the wrong shape for `T` | 422 | the library |
 //! | A failed bound `T`'s schema declares | 422 | Kynos, after the codec |
 //! | A response value the data model has no place for | 500 | [`faithful::Faithful`] |
@@ -35,6 +36,13 @@
 //! The scan runs first, so a library's own leniency (trailing bytes, ignored
 //! tags, no depth limit) never reaches a handler; conformance measures each
 //! library bare, so what the scan is protecting against is on record.
+//!
+//! The library then decodes `T` through [`faithful::Profiled`], the view
+//! `Json<T>` gives it: human-readable, so a `Uuid`, an IP address, a
+//! date-time or a decimal is read from the text its schema's `format` names
+//! (and [`faithful::Faithful`] writes it so), and a struct is read only from
+//! a map. Nesting is refused where `Json<T>` refuses it: 127 levels read, the
+//! 128th is a 400.
 //!
 //! # The schema it is honest about
 //!
@@ -74,11 +82,15 @@ impl<B: Backend, T: Serialize + DeserializeOwned> BodyCodec<T> for Cbor<B> {
                 DecodeError::Data(refusal.to_string())
             }
         })?;
-        // Cloning `Bytes` is a reference count, not a copy.
-        B::decode(bytes.clone()).map_err(|failure| match failure.class {
-            Class::Data => DecodeError::Data(failure.message),
-            _ => DecodeError::Syntax(failure.message),
-        })
+        // Cloning `Bytes` is a reference count, not a copy. `Profiled` is
+        // the view `Json<T>` gives `T`: human-readable, and a struct only
+        // from a map.
+        B::decode::<faithful::Profiled<T>>(bytes.clone())
+            .map(|profiled| profiled.0)
+            .map_err(|failure| match failure.class {
+                Class::Data => DecodeError::Data(failure.message),
+                _ => DecodeError::Syntax(failure.message),
+            })
     }
 
     fn encode(value: &T, out: &mut impl Write) -> std::io::Result<()> {

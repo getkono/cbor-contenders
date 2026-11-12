@@ -38,7 +38,17 @@ fn ill_formed_input_is_400() {
         ("01 01", Rule::Trailing),
         ("61 ff", Rule::InvalidUtf8),
         ("7f 61 c3 61 a9 ff", Rule::InvalidUtf8),
+        // The same split code point, as a key, definite and indefinite map.
+        ("a1 7f 61 c3 61 a9 ff 01", Rule::InvalidUtf8),
+        ("bf 7f 61 c3 61 a9 ff 01 ff", Rule::InvalidUtf8),
+        ("a1 7f 61 ff ff 01", Rule::InvalidUtf8),
         ("bf 61 61 ff", Rule::StrayBreak),
+        ("9f c0 ff", Rule::TagWithoutContent),
+        ("bf c0 ff", Rule::TagWithoutContent),
+        ("bf 61 61 c0 ff", Rule::TagWithoutContent),
+        ("82 c0 ff", Rule::TagWithoutContent),
+        ("c0", Rule::Truncated),
+        ("82 00 c0", Rule::Truncated),
     ] {
         let rule_got = refused(bytes);
         assert_eq!(rule_got, rule, "{bytes}");
@@ -92,12 +102,39 @@ fn values_without_a_json_equivalent_are_422() {
 }
 
 #[test]
+fn ill_formed_input_is_400_after_a_data_model_refusal() {
+    for (bytes, rule) in [
+        // A non-text key, then an indefinite integer.
+        ("a1 1f 00", Rule::IndefiniteArgument),
+        // A non-text key, then a simple value below 32 in two bytes.
+        ("a1 f8 10 00", Rule::SimpleTooShort),
+        // A byte string, then a reserved head.
+        ("82 40 1c", Rule::Reserved),
+        // A tag, then a truncated item; a NaN, then trailing bytes.
+        ("82 c1 00 19 01", Rule::Truncated),
+        ("f9 7e00 00", Rule::Trailing),
+        // A repeated key, then invalid text.
+        ("83 a2 61 61 01 61 61 02 61 ff 00", Rule::InvalidUtf8),
+    ] {
+        let refusal = scan(&hex(bytes)).expect_err(bytes);
+        assert_eq!(refusal.rule, rule, "{bytes}");
+        assert_eq!(refusal.status(), 400, "{bytes}");
+    }
+    // A body that is CBOR throughout keeps its first data-model refusal.
+    assert_eq!(refused("82 40 00"), Rule::ByteString);
+    assert_eq!(refused("82 40 c1 00"), Rule::ByteString);
+    assert_eq!(scan(&hex("82 01 40")).expect_err("bytes").offset, 2);
+}
+
+#[test]
 fn transparent_encodings_are_accepted() {
     for bytes in [
         // Indefinite text, array and map.
         "7f 62 6869 62 6869 ff",
         "9f 01 02 ff",
         "bf 61 61 01 61 62 9f ff ff",
+        // An indefinite key whose every chunk is UTF-8.
+        "a1 7f 62 c3a9 61 61 ff 01",
         // Non-preferred heads and floats.
         "19 0001",
         "1b 0000000000000001",
@@ -118,10 +155,36 @@ fn transparent_encodings_are_accepted() {
 
 #[test]
 fn nesting_is_bounded_without_recursion() {
-    let ok: Vec<u8> = std::iter::repeat_n(0x81, MAX_DEPTH).chain([0x00]).collect();
-    assert_eq!(scan(&ok), Ok(()));
-    let deep: Vec<u8> = std::iter::repeat_n(0x81, MAX_DEPTH + 1).chain([0x00]).collect();
-    assert_eq!(scan(&deep).expect_err("too deep").rule, Rule::TooDeep);
+    // serde_json's limit: 127 nested arrays or maps read, the 128th does not.
+    assert_eq!(MAX_DEPTH, 127);
+    for (levels, json_reads) in [(127, true), (128, false)] {
+        let json = format!("{}{}", "[".repeat(levels), "]".repeat(levels));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&json).is_ok(),
+            json_reads,
+            "{levels}"
+        );
+        let arrays: Vec<u8> = std::iter::repeat_n(0x81, levels - 1).chain([0x80]).collect();
+        let maps: Vec<u8> = std::iter::repeat_n([0xa1, 0x61, 0x61], levels - 1)
+            .flatten()
+            .chain([0xa0])
+            .collect();
+        let indefinite: Vec<u8> = std::iter::repeat_n(0x9f, levels)
+            .chain(std::iter::repeat_n(0xff, levels))
+            .collect();
+        for body in [arrays, maps, indefinite] {
+            match scan(&body) {
+                Ok(()) => assert!(json_reads, "{levels}: {body:02x?}"),
+                Err(refusal) => {
+                    assert!(!json_reads, "{levels}: {body:02x?}");
+                    assert_eq!(refusal.rule, Rule::TooDeep);
+                }
+            }
+        }
+    }
+    // Indefinite strings are not containers.
+    let text: Vec<u8> = std::iter::repeat_n(0x81, 126).chain([0x7f, 0x61, 0x61, 0xff]).collect();
+    assert_eq!(scan(&text), Ok(()));
     // A million levels is refused at the limit, on a small stack.
     let huge: Vec<u8> = std::iter::repeat_n(0x9f, 1_000_000).collect();
     let rule = std::thread::Builder::new()
@@ -190,4 +253,11 @@ fn well_formed_accepts_what_the_profile_refuses_but_not_ill_formed_input() {
     for bytes in ["", "1c", "ff", "7f 01 ff", "f8 18", "01 01", "61 ff", "5f 61 00 ff"] {
         assert!(well_formed(&hex(bytes)).is_err(), "{bytes}");
     }
+    // A tag needs its content in every mode.
+    for bytes in ["9f c0 ff", "bf c0 ff", "c0", "9f d9 d9f7 ff"] {
+        assert!(well_formed(&hex(bytes)).is_err(), "{bytes}");
+        assert!(!preferred(&hex(bytes)), "{bytes}");
+    }
+    assert_eq!(well_formed(&hex("9f c0 00 ff")), Ok(()));
+    assert_eq!(well_formed(&hex("9f c0 c1 00 ff")), Ok(()));
 }

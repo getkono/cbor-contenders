@@ -25,13 +25,15 @@ impl Native for Minicbor {
     }
 
     fn encode<T: NativeType>(value: &T) -> Result<Vec<u8>, Failure> {
-        let mut out = Vec::new();
-        value.mini_encode(&mut out)?;
-        Ok(out)
+        value.mini_to_vec()
     }
 
     fn encode_into<T: NativeType>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure> {
         out.clear();
         value.mini_encode(out)
+    }
+
+    fn encode_server<T: NativeType>(value: &T) -> Result<Vec<u8>, Failure> {
+        value.mini_to_vec()
     }
 }

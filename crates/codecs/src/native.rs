@@ -6,6 +6,18 @@
 //! format can carry it. A workload whose types it cannot carry (an enum with
 //! data for prost, a borrowed form for either) is not measured for it, and
 //! the matrix says so (`payloads::NATIVE`).
+//!
+//! # The server's own encode
+//!
+//! [`Native::encode_server`] is the encode a server built on the format
+//! makes, and the `encode-writer` shape measures it for a native entry. For
+//! prost it is `Message::encode_to_vec`, which Kynos's `Protobuf<T>` response
+//! calls (`kynos-0.5.0/src/response/codec/protobuf.rs`); for minicbor's
+//! derive, `minicbor::to_vec`, the library's own entry point. A serde entry's
+//! counterpart is [`Backend::to_writer`](crate::Backend::to_writer) into a
+//! [`BodyWriter`](crate::writer::BodyWriter) and then
+//! [`finish`](crate::writer::BodyWriter::finish), which is what Kynos does
+//! for `Json<T>` and `Encoded<C, T>`.
 
 pub mod prost;
 
@@ -26,6 +38,23 @@ pub trait NativeType: Sized {
     fn mini_decode(body: &[u8]) -> Result<Self, Failure>;
     /// Append minicbor's derived encoding to `out`.
     fn mini_encode(&self, out: &mut Vec<u8>) -> Result<(), Failure>;
+
+    /// The protobuf encoding in a new buffer. [`native_type!`](crate::native_type)
+    /// makes it prost's `encode_to_vec`; the default appends to an empty
+    /// `Vec`, for a type that carries nothing.
+    fn proto_to_vec(&self) -> Result<Vec<u8>, Failure> {
+        let mut out = Vec::new();
+        self.proto_encode(&mut out)?;
+        Ok(out)
+    }
+
+    /// minicbor's derived encoding in a new buffer. [`native_type!`](crate::native_type)
+    /// makes it `minicbor::to_vec`; the default appends to an empty `Vec`.
+    fn mini_to_vec(&self) -> Result<Vec<u8>, Failure> {
+        let mut out = Vec::new();
+        self.mini_encode(&mut out)?;
+        Ok(out)
+    }
 }
 
 /// A native backend, as a server uses one.
@@ -45,6 +74,10 @@ pub trait Native: 'static {
     fn encode<T: NativeType>(value: &T) -> Result<Vec<u8>, Failure>;
     /// Encode into `out`, which is cleared first and may already have capacity.
     fn encode_into<T: NativeType>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure>;
+    /// Encode as a server built on the format does (module docs): prost's
+    /// `encode_to_vec`, as Kynos's `Protobuf<T>` calls it, and
+    /// `minicbor::to_vec`.
+    fn encode_server<T: NativeType>(value: &T) -> Result<Vec<u8>, Failure>;
 }
 
 #[doc(hidden)]
@@ -61,9 +94,22 @@ pub mod support {
         T::decode(body).map_err(|e| Failure::new(Class::Syntax, e))
     }
 
-    /// prost's encode, into a `Vec` (which grows, so it cannot fail).
+    /// prost's encode, appended to `out` with room for it reserved first:
+    /// what `encode_to_vec` does (`Vec::with_capacity(encoded_len)`, then
+    /// `encode_raw`), into a buffer that may already hold capacity. Calling
+    /// `encode` instead would compute `encoded_len` a second time for its
+    /// capacity check, which a `Vec` always passes.
     pub fn proto_encode<T: ::prost::Message>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure> {
-        value.encode(out).map_err(|e| Failure::new(Class::Io, e))
+        out.reserve(value.encoded_len());
+        value.encode_raw(out);
+        Ok(())
+    }
+
+    /// prost's `encode_to_vec`: a buffer of exactly `encoded_len`, written
+    /// once. Infallible, as Kynos's `Protobuf<T>` relies on.
+    #[must_use]
+    pub fn proto_to_vec<T: ::prost::Message>(value: &T) -> Vec<u8> {
+        value.encode_to_vec()
     }
 
     /// minicbor's derived decode.
@@ -87,6 +133,12 @@ pub mod support {
     pub fn mini_encode<T: ::minicbor::Encode<()>>(value: &T, out: &mut Vec<u8>) -> Result<(), Failure> {
         ::minicbor::encode(value, out).map_err(|e| Failure::new(Class::Io, e))
     }
+
+    /// `minicbor::to_vec`: an `Encoder` over a new `Vec`.
+    #[cfg(feature = "minicbor")]
+    pub fn mini_to_vec<T: ::minicbor::Encode<()>>(value: &T) -> Result<Vec<u8>, Failure> {
+        ::minicbor::to_vec(value).map_err(|e| Failure::new(Class::Io, e))
+    }
 }
 
 /// Implement [`NativeType`] for types deriving `prost::Message` and, where
@@ -106,6 +158,9 @@ macro_rules! native_type {
             fn proto_encode(&self, out: &mut ::std::vec::Vec<u8>) -> ::core::result::Result<(), $crate::Failure> {
                 $crate::native::support::proto_encode(self, out)
             }
+            fn proto_to_vec(&self) -> ::core::result::Result<::std::vec::Vec<u8>, $crate::Failure> {
+                ::core::result::Result::Ok($crate::native::support::proto_to_vec(self))
+            }
             fn mini_decode(body: &[u8]) -> ::core::result::Result<Self, $crate::Failure> {
                 #[cfg(feature = "minicbor")]
                 return $crate::native::support::mini_decode(body);
@@ -123,6 +178,12 @@ macro_rules! native_type {
                     let _ = out;
                     Err($crate::Failure::unsupported())
                 }
+            }
+            fn mini_to_vec(&self) -> ::core::result::Result<::std::vec::Vec<u8>, $crate::Failure> {
+                #[cfg(feature = "minicbor")]
+                return $crate::native::support::mini_to_vec(self);
+                #[cfg(not(feature = "minicbor"))]
+                Err($crate::Failure::unsupported())
             }
         }
     )*};

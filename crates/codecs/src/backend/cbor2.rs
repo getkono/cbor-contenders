@@ -3,7 +3,19 @@
 //! Borrows from the input. Its `from_slice` decodes the first item and, as
 //! its documentation says, does not report trailing data (`validate_slice`
 //! would, at the cost of a second pass the adapter does not add).
-
+//!
+//! # What its error can tell apart
+//!
+//! `Syntax` is what its header parser refuses (`core.rs`): additional
+//! information 28 to 30, an indefinite length on an integer or a tag, a
+//! two-byte simple value below 32, a chunk of another type in an indefinite
+//! string, and text that is not UTF-8. A break where an item belongs is
+//! `Syntax` when it is skipped, but a typed decode that meets one (`ff`,
+//! `82 01 ff` into a value) reports it as an unexpected "break", a
+//! `Semantic` error, so it is answered 422. Every other `Semantic` error is
+//! a serde refusal of a well-formed item. A decode of a named type skips
+//! every tag but the two bignums, so a tag there is not an error at all;
+//! `deserialize_any` hands a tag to the visitor as an enum.
 use bytes::Bytes;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 

@@ -16,7 +16,9 @@
 //!   and minicbor's own `Encode`/`Decode`.
 //!
 //! Any copy a backend needs to meet the contract happens inside the adapter,
-//! so it is inside every measurement. No adapter adds a check its library
+//! so it is inside every measurement. [`writer::BodyWriter`] is the buffer
+//! Kynos encodes a response into, so an encode can be measured as Kynos's
+//! server makes it. No adapter adds a check its library
 //! lacks (trailing bytes, depth): conformance judges the library as a server
 //! would get it, and [`Backend::TRAILING`] records which ones check.
 
@@ -24,6 +26,7 @@ pub mod backend;
 pub mod body;
 pub mod failure;
 pub mod native;
+pub mod writer;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 

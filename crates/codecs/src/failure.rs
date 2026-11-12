@@ -57,8 +57,15 @@ impl Failure {
         Self::new(Class::Unsupported, "unsupported by this backend")
     }
 
-    /// The status a server answers with: 422 for a valid body of the wrong
-    /// shape, 400 for everything else.
+    /// The status a server answers a refused *request body* with: 422 for
+    /// [`Class::Data`], 400 for [`Class::Syntax`] and [`Class::Eof`].
+    ///
+    /// The other two classes are not a client's answer, and 400 here only
+    /// keeps them off the 422 side of the line: [`Class::Io`] is the writer
+    /// failing, which an encode surfaces and a server answers 500 for (no
+    /// decode of an in-memory body raises it), and [`Class::Unsupported`] is
+    /// an operation the backend lacks, which a caller checks for before it
+    /// asks for a status.
     #[must_use]
     pub fn status(&self) -> u16 {
         if self.class == Class::Data { 422 } else { 400 }

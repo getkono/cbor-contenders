@@ -4,12 +4,20 @@
 //! Its `DecodeError` hides minicbor's error kind (the field is private and
 //! has no accessor), so the adapter cannot read the class off the error.
 //! Instead, on the failure path only, it asks minicbor's own decoder whether
-//! the input is one well-formed item (`Decoder::skip`): if not, the client
-//! sent bytes that are not CBOR (400); if so, the item has the wrong shape
-//! (422). That second pass costs nothing on a body that decodes. `skip` does
-//! not validate UTF-8 in text strings, so an invalid text string is classed
-//! 422 where it should be 400; conformance shows where.
-
+//! the input begins with one well-formed item (`Decoder::skip`): if not, the
+//! client sent bytes that are not CBOR (400); if so, the item has the wrong
+//! shape (422). That second pass costs nothing on a body that decodes.
+//!
+//! `skip` validates UTF-8: it reads text through `str_iter`, which checks
+//! every chunk (`decode/decoder.rs`), so invalid text is 400. What it does
+//! not refuse, so the probe answers 422 where the body is not CBOR:
+//!
+//! - a lone break (`ff`), and a break in a definite array or map (`82 01
+//!   ff`): `skip` counts a break against the items it still expects;
+//! - a two-byte simple value below 32 (`f8 18`): `skip` reads the byte after
+//!   `f8` without checking it.
+//!
+//! The probe is the library's own check, so the adapter adds none of these.
 use bytes::Bytes;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
