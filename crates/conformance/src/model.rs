@@ -8,10 +8,16 @@
 //! (`kynos-cbor`: [`faithful::scan`] before a decode, [`faithful::Faithful`]
 //! around an encode).
 //!
-//! Gates, against the worked codec only: a case with no faithful schema that
-//! its profile lets through, or a case inside the data model that it
-//! refuses. The libraries' bare answers are findings, not gates: a codec that
-//! is faithful has to be written around them, and this section says where.
+//! Gates, against the worked codec only. On decode the gate tests
+//! `faithful`'s profile, not the library: a body with no faithful schema that
+//! [`faithful::scan`] lets through, or a body inside the data model it
+//! refuses (what the library then makes of a body the scan passed is its
+//! bare answer, recorded beside it). On encode it tests the codec's whole
+//! path, the library writing through [`faithful::Faithful`]: a value with no
+//! faithful schema written, or one inside the data model refused. The
+//! libraries' bare answers are findings, not gates: a codec that is faithful
+//! has to be written around them, and this section says where, including
+//! each tag a library writes on its own.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +26,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cases::{decode, hex};
-use crate::outcome::guarded;
+use crate::outcome::{ARRIVALS, Outcome, Target, Typed, guarded, owned};
 use crate::record::Section;
 
 /// `(case, body, the target a handler would declare, what a faithful schema
@@ -41,6 +47,14 @@ const DECODE: &[(&str, &str, &str, Option<&str>)] = &[
         Some("array of uint8"),
     ),
     ("text into serde_bytes", "63 616263", "bytes", Some("string")),
+    ("a byte string into bytes::Bytes", "43 010203", "bytes-crate", None),
+    ("text into Vec<u8>", "63 616263", "byte-vec", Some("string")),
+    (
+        "enum map keys into BTreeMap<enum, _>",
+        "a1 65 416c706861 02",
+        "enum-map",
+        Some("object"),
+    ),
     (
         "integer map keys into BTreeMap<u64, _>",
         "a2 01 02 03 04",
@@ -118,9 +132,48 @@ const DECODE: &[(&str, &str, &str, Option<&str>)] = &[
 ];
 
 /// A map key that is an enum's unit variant, written as its name.
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
     Alpha,
+}
+
+/// `bytes::Bytes` (its `serde` feature), rendered as hex.
+#[derive(Debug)]
+pub struct BytesCrate;
+
+impl Target for BytesCrate {
+    type Out<'de> = bytes::Bytes;
+    fn view(out: &bytes::Bytes) -> Value {
+        Value::String(hex::encode(out))
+    }
+}
+
+/// The library's own decode of `bytes` into `target`: [`decode`]'s targets
+/// and this section's own.
+fn library<B: Backend>(target: &str, bytes: &[u8]) -> Outcome {
+    match target {
+        "bytes-crate" => owned::<B, BytesCrate>(bytes, ARRIVALS[0]),
+        "enum-map" => owned::<B, Typed<BTreeMap<Key, u32>>>(bytes, ARRIVALS[0]),
+        _ => decode::<B>(target, bytes),
+    }
+}
+
+/// The tag number an encoding starts with, if it starts with one.
+fn leading_tag(bytes: &[u8]) -> Option<u64> {
+    let (&first, rest) = bytes.split_first()?;
+    if first >> 5 != 6 {
+        return None;
+    }
+    let width = match first & 0x1f {
+        info @ 0..=23 => return Some(u64::from(info)),
+        24 => 1,
+        25 => 2,
+        26 => 4,
+        27 => 8,
+        _ => return None,
+    };
+    let argument = rest.get(..width)?;
+    Some(argument.iter().fold(0, |n, b| n << 8 | u64::from(*b)))
 }
 
 /// The encode cases: a value, its case, and whether a faithful schema
@@ -128,7 +181,11 @@ enum Key {
 fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
     fn bare<B: Backend, T: Serialize>(value: &T) -> Value {
         match guarded(|| B::encode(value)) {
-            Ok(Ok(bytes)) => json!({ "hex": hex::encode(&bytes), "major": bytes.first().map(|b| b >> 5) }),
+            Ok(Ok(bytes)) => json!({
+                "hex": hex::encode(&bytes),
+                "major": bytes.first().map(|b| b >> 5),
+                "tag": leading_tag(&bytes),
+            }),
             Ok(Err(failure)) => json!({ "refused": failure.message }),
             Err(panic) => json!({ "panic": panic }),
         }
@@ -159,6 +216,7 @@ fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
         case!("BTreeMap<enum, u32>", BTreeMap::from([(Key::Alpha, 2u32)]), true),
         case!("f64::NAN", f64::NAN, false),
         case!("f64::INFINITY", f64::INFINITY, false),
+        case!("1u128", 1u128, false),
         case!("u128::MAX", u128::MAX, false),
         case!("i128::MIN", i128::MIN, false),
         case!("Option::<u8>::None", None::<u8>, true),
@@ -175,7 +233,7 @@ pub fn run<B: Backend>() -> Section {
     for (what, text, target, schema) in DECODE {
         let bytes = hex(text);
         section.case();
-        let library = decode::<B>(target, &bytes).describe();
+        let library = library::<B>(target, &bytes).describe();
         let profile = faithful::scan(&bytes);
         let refused = profile.is_err();
         if refused == schema.is_some() {
@@ -193,7 +251,7 @@ pub fn run<B: Backend>() -> Section {
             "target": target,
             "schema": schema,
             "library": library,
-            "codec": profile.map_or_else(|r| json!({ "refused": r.status(), "rule": format!("{:?}", r.rule) }), |()| json!("decodes")),
+            "codec": profile.map_or_else(|r| json!({ "refused": r.status(), "rule": format!("{:?}", r.rule) }), |()| json!("passes the profile")),
         }));
     }
     let mut encoded = Vec::new();
@@ -218,4 +276,26 @@ pub fn run<B: Backend>() -> Section {
     section.data("decode", Value::Array(decoded));
     section.data("encode", Value::Array(encoded));
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use codecs::backend::serde_cbor::SerdeCbor;
+
+    use super::*;
+
+    #[test]
+    fn the_worked_codec_over_the_oracle_holds_the_profile() {
+        let section = run::<SerdeCbor>();
+        assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+    }
+
+    #[test]
+    fn a_leading_tag_is_read_at_every_width() {
+        assert_eq!(leading_tag(&hex("c2 41 01")), Some(2));
+        assert_eq!(leading_tag(&hex("d8 63 01")), Some(0x63));
+        assert_eq!(leading_tag(&hex("d9 d9f7 01")), Some(55799));
+        assert_eq!(leading_tag(&hex("da 00010000 01")), Some(0x1_0000));
+        assert_eq!(leading_tag(&hex("01")), None);
+    }
 }

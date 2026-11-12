@@ -49,6 +49,15 @@ hyper = { version = "1", features = ["http1", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 http = "1"
+# The formatted-string types Kynos describes (its uuid1, time-chrono04,
+# time-jiff02, decimal-rust1 and decimal-big04 features), at the versions
+# Kynos's lockfile resolves. Conformance only: what each library writes for
+# them, and that the worked codec writes the string their schema describes.
+uuid = { version = "=1.26.1", default-features = false, features = ["std", "serde"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde"] }
+jiff = { version = "=0.2.39", default-features = false, features = ["std", "serde"] }
+rust_decimal = { version = "=1.43.0", default-features = false, features = ["std", "serde"] }
+bigdecimal = { version = "=0.4.11", default-features = false, features = ["std", "serde"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
