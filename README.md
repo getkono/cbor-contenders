@@ -167,6 +167,7 @@ OpenAPI 3.2 reads a non-JSON body through the JSON Schema data model, and Kynos 
 - integers beyond 2^53 and 2^64;
 - indefinite lengths;
 - non-preferred heads;
+- unit, a unit struct and `serde_json::Value`'s null on encode (serde writes all three as unit, which JSON writes as `null` and minicbor-serde and cbor4ii as an empty array);
 - Kynos's formatted-string types (`Uuid`, `Ipv4Addr`, `Ipv6Addr`, `IpAddr`, chrono's `DateTime<Utc>` and `NaiveDate`, jiff's `Timestamp`, `rust_decimal::Decimal`, `BigDecimal`): the bytes written, whether a tag, and whether the string form Kynos's schema describes is read back.
 
 It also records what the worked codec answers. The worked codec's rules, in `crates/faithful`:
@@ -182,7 +183,7 @@ It also records what the worked codec answers. The worked codec's rules, in `cra
 | a repeated key in one map | 422 | invalid under RFC 8949 section 5.6, and an object has one value per key |
 | indefinite lengths, non-preferred heads and floats, any 64-bit integer | accepted | transparent to the schema |
 
-On encode, a byte string, a non-finite float, an `i128`/`u128` and a non-string map key are refused, which Kynos answers 500. The cost of the scan is inside every end-to-end figure for a CBOR entry.
+On encode, a byte string, a non-finite float, an `i128`/`u128` and a non-string map key are refused, which Kynos answers 500. Unit and a unit struct are written as `null`. The gate on encode requires each value a schema describes to be written as the CBOR item for the JSON value serde_json writes, as the oracle reads it, not merely to be written. The cost of the scan is inside every end-to-end figure for a CBOR entry.
 
 The codec presents `T` with a human-readable serde view (`is_human_readable() == true`) both ways, as `Json<T>` does. So the types Kynos describes as formatted strings use their string forms, as Kynos's schema for them says: `Uuid`, `Ipv4Addr`, `Ipv6Addr` and `IpAddr`, chrono's and jiff's date-times, `rust_decimal::Decimal` and `BigDecimal`. Bare, a library would write some of them as byte strings or arrays, which the schema does not describe. For the same reason the codec refuses an array where `T` is a struct (`[7, "seven"]` for `{id, name}`), as `Json<T>` does: a schema object is not an array.
 

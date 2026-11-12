@@ -98,12 +98,17 @@ impl<S: Serializer> Serializer for Guard<S> {
         self.0.serialize_some(&Faithful(value))
     }
 
+    /// JSON's data model writes unit as `null` (`serde_json::Value::Null`
+    /// serializes as unit), but a CBOR library may write it otherwise:
+    /// minicbor-serde and cbor4ii write an empty array. `null` is what
+    /// every library writes for `None`.
     fn serialize_unit(self) -> Result<S::Ok, S::Error> {
-        self.0.serialize_unit()
+        self.0.serialize_none()
     }
 
-    fn serialize_unit_struct(self, name: &'static str) -> Result<S::Ok, S::Error> {
-        self.0.serialize_unit_struct(name)
+    /// A unit struct is `null` too, as serde_json writes it.
+    fn serialize_unit_struct(self, _: &'static str) -> Result<S::Ok, S::Error> {
+        self.0.serialize_none()
     }
 
     fn serialize_unit_variant(self, name: &'static str, index: u32, variant: &'static str) -> Result<S::Ok, S::Error> {

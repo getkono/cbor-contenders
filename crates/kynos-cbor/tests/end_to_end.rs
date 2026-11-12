@@ -164,6 +164,11 @@ macro_rules! suite {
                 Encoded::new(Reading { value: f64::NAN })
             }
 
+            #[kynos::get("/nulls")]
+            async fn nulls() -> Encoded<Cbor, Unchecked<serde_json::Value>> {
+                Encoded::new(Unchecked(serde_json::json!({ "a": null, "b": [1, null] })))
+            }
+
             #[kynos::post("/pairs")]
             async fn pairs(_: Encoded<Cbor, Pair>) -> NoContent {
                 NoContent
@@ -199,6 +204,7 @@ macro_rules! suite {
                     echo,
                     negotiated,
                     nan,
+                    nulls,
                     pairs,
                     pairs_as_json,
                     bounded,
@@ -394,6 +400,15 @@ macro_rules! suite {
             async fn a_wrong_shape_is_the_librarys_422() {
                 let (status, detail) = post(&client(), record_with("id", "63 736576")).await;
                 assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{detail:?}");
+            }
+
+            /// `serde_json::Value::Null` serializes as unit, which some
+            /// libraries write as an empty array; the schema says `null`.
+            #[tokio::test]
+            async fn a_json_null_is_written_as_cbor_null() {
+                let response = client().get("/nulls").send().await;
+                assert_eq!(response.status(), StatusCode::OK);
+                assert_eq!(response.bytes()[..], hex("a2 61 61 f6 61 62 82 01 f6")[..]);
             }
 
             #[tokio::test]

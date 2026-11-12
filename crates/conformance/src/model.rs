@@ -14,7 +14,9 @@
 //! refuses (what the library then makes of a body the scan passed is its
 //! bare answer, recorded beside it). On encode it tests the codec's whole
 //! path, the library writing through [`faithful::Faithful`]: a value with no
-//! faithful schema written, or one inside the data model refused. The
+//! faithful schema written, one inside the data model refused, or one
+//! written as another value than the JSON value serde_json writes for it
+//! (unit as an empty array, say), as the oracle reads the bytes. The
 //! libraries' bare answers are findings, not gates: a codec that is faithful
 //! has to be written around them, and this section says where, including
 //! each tag a library writes on its own.
@@ -144,6 +146,10 @@ enum Key {
     Alpha,
 }
 
+/// A unit struct, which serde_json writes as `null`.
+#[derive(Debug, Serialize)]
+struct Nothing;
+
 /// `bytes::Bytes` (its `serde` feature), rendered as hex.
 #[derive(Debug)]
 pub struct BytesCrate;
@@ -183,9 +189,11 @@ fn leading_tag(bytes: &[u8]) -> Option<u64> {
     Some(argument.iter().fold(0, |n, b| n << 8 | u64::from(*b)))
 }
 
-/// The encode cases: a value, its case, and whether a faithful schema
-/// describes what a JSON-model encoder must write for it.
-fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
+/// The encode cases: a value, its case, the library's bare encoding, the
+/// worked codec's, and, where a faithful schema describes the value, the JSON
+/// value it describes (what serde_json writes): the codec must write a CBOR
+/// item that reads as that value.
+fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, Option<Value>)> {
     fn bare<B: Backend, T: Serialize>(value: &T) -> Value {
         match guarded(|| B::encode(value)) {
             Ok(Ok(bytes)) => json!({
@@ -208,7 +216,8 @@ fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
     macro_rules! case {
         ($what:literal, $value:expr, $faithful:expr) => {{
             let value = $value;
-            ($what, bare::<B, _>(&value), profiled::<B, _>(&value), $faithful)
+            let json = $faithful.then(|| serde_json::to_value(&value).expect("serde_json writes every faithful case"));
+            ($what, bare::<B, _>(&value), profiled::<B, _>(&value), json)
         }};
     }
     vec![
@@ -228,8 +237,26 @@ fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
         case!("i128::MIN", i128::MIN, false),
         case!("Option::<u8>::None", None::<u8>, true),
         case!("()", (), true),
+        case!("a unit struct", Nothing, true),
+        case!("a unit variant", Key::Alpha, true),
+        case!("serde_json::Value::Null", Value::Null, true),
+        case!(
+            "a serde_json::Value object holding null",
+            json!({ "a": null, "b": [1, null] }),
+            true
+        ),
         case!("u64::MAX", u64::MAX, true),
     ]
+}
+
+/// Whether the worked codec's answer `codec` is the CBOR item for `json`:
+/// written, and read by the oracle as that JSON value.
+fn writes_json(codec: &Value, json: &Value) -> bool {
+    codec["hex"]
+        .as_str()
+        .and_then(|text| hex::decode(text).ok())
+        .and_then(|bytes| serde_cbor::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|read| &read == json)
 }
 
 /// What one formatted-string type does, bare and through the worked codec.
@@ -382,21 +409,24 @@ pub fn run<B: Backend>() -> Section {
     }
     let mut encoded = Vec::new();
     if B::ENCODES {
-        for (what, library, codec, schema) in encode_cases::<B>() {
+        for (what, library, codec, json) in encode_cases::<B>() {
             section.case();
             let let_through = codec.get("hex").is_some();
-            if let_through != schema {
-                section.differ(what, json!(schema), codec.clone());
-                section.fail(
-                    what,
-                    if let_through {
-                        "the worked codec writes a value no schema describes"
-                    } else {
-                        "the worked codec refuses a value inside the data model"
-                    },
-                );
+            let wrong = match &json {
+                None if let_through => Some("the worked codec writes a value no schema describes"),
+                Some(_) if !let_through => Some("the worked codec refuses a value inside the data model"),
+                Some(json) if !writes_json(&codec, json) => {
+                    Some("the worked codec writes another value than the one its schema describes")
+                }
+                _ => None,
+            };
+            if let Some(detail) = wrong {
+                section.differ(what, json.clone().unwrap_or(Value::Null), codec.clone());
+                section.fail(what, detail);
             }
-            encoded.push(json!({ "case": what, "faithful": schema, "library": library, "codec": codec }));
+            encoded.push(
+                json!({ "case": what, "faithful": json.is_some(), "json": json, "library": library, "codec": codec }),
+            );
         }
     }
     let formatted = formatted::<B>(&mut section);
