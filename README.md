@@ -106,16 +106,16 @@ Every workload is a typed Rust struct, never an untyped tree, in an owned form a
 | --- | --- |
 | Kynos shapes (the decision rule) | `json-small`, `echo-post`, `json-large`: kynos-bench's values, whose JSON is byte-identical to its golden bodies (asserted by digest) |
 | Size sweep | `Vec<Item>` at exactly 64 B to 1 MiB of CBOR |
-| Families | `ints`, `ints-extremes`, `floats`, `f32s`, `floats-short`, `unicode`, `long-string`, `nested-{100,255,257,10000}` (either side of the 256 limit ciborium, cbor4ii and cbor2 share; serde_json stops at 128), `wide-1000`, `array-small`, `enums`, `sparse`, `defaults`, `keys-long-int` (integer map keys, which CBOR writes as integers and JSON as strings), and two CBOR families: `byte-strings` (opaque blobs, a byte string in CBOR and base64 in JSON) and `numeric-arrays` |
+| Families | `ints`, `ints-extremes`, `floats`, `f32s`, `floats-short`, `unicode`, `long-string`, `nested-{100,255,257,10000}` (either side of the 256 limit ciborium, cbor4ii and cbor2 share; serde_json, and so `Json<T>`, accepts 127 levels and refuses the 128th), `wide-1000`, `array-small`, `enums`, `sparse`, `defaults`, `keys-long-int` (integer map keys, which CBOR writes as integers and JSON as strings), and two CBOR families: `byte-strings` (opaque blobs, a byte string in CBOR and base64 in JSON) and `numeric-arrays` |
 | Real-world schemas | `twitter-like`, `citm-like`, `canada-like`, `skip-unknown` |
-| Rejections | `reject-truncated` (`json-large` cut at 90 %: a 400) and `reject-shape` (one `id` as text: a 422) |
+| Rejections (`Group::Rejection`) | `reject-truncated` (`json-large` cut at 90 %: a 400) and `reject-shape` (one `id` as text: a 422) |
 
 Notes:
 
 - **Dropped workloads.** serde-json-contenders' JSON-text workloads (escapes, pretty-printing, `\u` escapes) have no CBOR meaning and are dropped.
 - **Protobuf and minicbor's derive** carry the workloads whose shape they can. A root list becomes a one-field message, since a protobuf message cannot be a bare list. Every other workload is not measured for them, and the matrix says so.
 - **Arrivals.** Decode input arrives as one frame sharing a larger buffer (`shared`, as hyper hands out a single-frame body) or as a fresh buffer of its own (`unique`). A body that came in several frames is modelled as `unique`: the one buffer Kynos collects them into, not the frames themselves.
-- **The borrowing forms** use `&'de str` and `&'de [u8]` (through `serde_bytes`) directly, in `Vec`, `Option` and map keys too. serde borrows only into a field that is directly one of those or a `Cow`, and a `Cow` inside a container copies. A library that cannot borrow is recorded as not borrowing, not gated: Kynos's `BodyCodec` decodes `DeserializeOwned`.
+- **The borrowing forms** use `&'de str` and `&'de [u8]` (through `serde_bytes`) directly, in `Vec`, `Option` and map keys too. serde borrows only into a field that is directly one of those or a `Cow`, and a `Cow` inside a container copies. A test decodes every borrowing form through the oracle and checks that every string and byte string points into the input. A library that cannot borrow (ciborium has no borrowing entry point; c2pa_cbor reads through a `Cursor`; serde_json cannot borrow an escaped string or base64) is recorded as not borrowing, under `not_borrowed` in each section and as a recorded cell in the matrix, not gated: Kynos's `BodyCodec` decodes `DeserializeOwned`, and the owned decode of the same body is judged.
 
 ### Conformance
 
@@ -132,18 +132,18 @@ Answers RFC 8949 leaves to the implementation are recorded, not gated: duplicate
 | Section | What | Gates |
 | --- | --- | --- |
 | `appendix_a` | The 81 examples of RFC 8949 Appendix A, transcribed from the vendored RFC (`references/rfc8949`). The transcription is checked row by row against the RFC text. Each row is decoded into its natural type and re-encoded | a refusal or another value, except bignums, `undefined`, unassigned simple values and tags |
-| `wellformed` | section 5.1's ill-formed bodies, into a value and skipped, both arrivals | accepting one, or answering 422 |
-| `strings` | invalid UTF-8 in definite and indefinite text, in a skipped member, into `String`, `&str`, `Cow` | accepting it, or answering 422 |
+| `wellformed` | every ill-formed example of RFC 8949 Appendix F.1 (checked list by list against the vendored text) and the section 5.1 cases beside them, into a `serde_cbor::Value` tree and skipped, both arrivals | accepting one, or answering 422 |
+| `strings` | invalid UTF-8 in definite and indefinite text (a code point split across chunks included), in a skipped member, into `String`, `&str`, `Cow`; valid text into `&str` | accepting it, or answering 422; a library that does not borrow is recorded |
 | `structs` | `deny_unknown_fields`, ill-formed skipped members, missing members; repeated keys recorded | yes / recorded |
-| `depth` | 100 up to 1 000 000 levels, in a subprocess, on 2 MiB and 8 MiB stacks | a crash, or answering 422 |
-| `lengths` | heads declaring 2^32 and 2^63 items or bytes over a few-byte body, under a counting allocator | allocating more than 1 MiB, or accepting it |
+| `depth` | 100 up to 1 000 000 levels of definite and indefinite arrays and maps into a value, `IgnoredAny` and a recursive derived struct, and the `nested-*` workloads decoded and encoded, in a subprocess, on 2 MiB and 8 MiB stacks | a crash while decoding, or answering 422; a crash while encoding is recorded |
+| `lengths` | heads declaring 2^32 and 2^63 items or bytes over a few-byte body, each into the targets it fits, under a counting allocator | allocating more than 4 MiB (serde's own size-hint cap is 1 MiB of elements; the declared size is gigabytes), or accepting it |
 | `integers` | every type's boundaries; `-2^64` and bignums recorded | another value, an out-of-range value accepted, the wrong class |
-| `floats` | half, single and double; `-0`; infinities; subnormals; NaN payloads recorded; a million random `f64` and `f32` through the library's own encoder and decoder, bit for bit | yes |
-| `deterministic` | the same value encoded twice; preferred serialization per workload, and a `HashMap` across processes, recorded | differing bytes in one process |
-| `attributes` | `flatten`, `untagged`, three enum taggings, `alias`, `rename_all`, `default`, `skip`, `Option`, borrowing, against serde_json on the same value | yes |
-| `model` | the JSON data model (next section) | the worked codec only |
+| `floats` | half, single and double; `-0`; infinities; subnormals; NaN payloads recorded; `-0`, ±infinity and NaN encoded as `f32` and `f64` (bytes and head width recorded); a million random `f64` and `f32` through the library's own encoder and decoder, bit for bit | yes; NaN's encoding recorded |
+| `deterministic` | the same value encoded twice; preferred serialization per workload, map key order against section 4.2.1's bytewise order, the opt-in deterministic modes (none is used), and every workload's encoding across two processes, recorded | differing bytes in one process |
+| `attributes` | `flatten`, `untagged`, three enum taggings, unit and newtype variants, `alias`, `rename_all`, `default`, `skip`, `Option`, borrowing, decoded against serde_json on the same value, and encoded and read back through the library's own decoder and the oracle (preferred serialization recorded) | yes |
+| `model` | the JSON data model (next section), and Kynos's formatted-string types | the worked codec only |
 | `status` | every truncation of the three Kynos bodies, and a wrong shape | yes |
-| `encode_diff` | every workload encoded and decoded, against the oracle and the workload's own value | another value |
+| `encode_diff` | every workload encoded through `to_vec`, a reused buffer and `to_writer` into Kynos's `BodyWriter`, and decoded, against the oracle and the workload's own value | another value |
 
 Beyond the suite:
 
@@ -152,27 +152,28 @@ Beyond the suite:
   - arbitrary bytes into an attribute-heavy struct, owned and borrowed;
   - arbitrary values round-tripped.
 
-  A divergence is an ill-formed body accepted, as judged by `faithful::well_formed`, which shares no code with any candidate. A value that differs from the oracle's is one too, and so is any crash. A memory error AddressSanitizer reports is a divergence (clause 3) and unsoundness (clause 4). The minimized corpus of every run is committed under `results/fuzz-corpus/`.
-- **Miri** runs a slice of the suite wherever a candidate's code allows. Where it cannot run (`unsupported`), clause 3 stays pending.
+  A divergence is an ill-formed body accepted or answered 422, as judged by `faithful::well_formed`, which shares no code with any candidate. A value that differs from the oracle's (tags compared by number) is one too, as is a borrowed decode whose value differs from the owned one, and any crash. A body whose only fault is bytes after the item, into a library whose `TRAILING` is `Ignored`, is counted, not a divergence: `wellformed` already gates it, and it would otherwise mask every other finding within seconds. Other differences (a well-formed body refused, a status of the other class than the oracle's) are tallied in the run's log. The round-trip target also writes through `to_writer` into Kynos's `BodyWriter`, which must match `to_vec` byte for byte. A memory error AddressSanitizer reports is a divergence (clause 3) and unsoundness (clause 4). The minimized corpus of every run is committed under `results/fuzz-corpus/`.
+- **Miri** runs every section it can, one test per section, one at a time, so the report shows each section's outcome. `depth` and `deterministic` re-execute the `conform` binary, which Miri cannot, and are listed as not run; `status` and `encode_diff` run on `json-small` only. Where Miri cannot run a candidate at all (`unsupported`), clause 3 stays pending.
 
 ### The JSON data model (#989 section 5)
 
 OpenAPI 3.2 reads a non-JSON body through the JSON Schema data model, and Kynos describes an `Encoded<C, T>` body with the schema it derives from `T`. CBOR carries values that model has no place for. Kynos's trust model puts the duty on the codec: refuse what the schema cannot describe. The `model` section records, for every library bare, what it does with each such case:
 
-- byte strings into `Vec<u8>` and `serde_bytes`, and arrays of integers into them;
-- integer map keys;
-- tags 0 to 5 and 55799;
+- byte strings into `Vec<u8>`, `serde_bytes` and `bytes::Bytes`, and arrays of integers and text into them;
+- integer and enum map keys, on encode and decode;
+- tags 0 to 5 and 55799 on decode, and the tag each library writes on encode;
 - `undefined` and simple values;
 - NaN and infinities;
 - integers beyond 2^53 and 2^64;
 - indefinite lengths;
-- non-preferred heads.
+- non-preferred heads;
+- Kynos's formatted-string types (`Uuid`, `Ipv4Addr`, `Ipv6Addr`, `IpAddr`, chrono's `DateTime<Utc>` and `NaiveDate`, jiff's `Timestamp`, `rust_decimal::Decimal`, `BigDecimal`): the bytes written, whether a tag, and whether the string form Kynos's schema describes is read back.
 
 It also records what the worked codec answers. The worked codec's rules, in `crates/faithful`:
 
 | Body | Answer | Why |
 | --- | --- | --- |
-| ill-formed (section 5.1), invalid UTF-8, bytes after the item, nested 128 levels deep or deeper | 400 | not a valid CBOR item; `Json<T>` accepts 127 levels and refuses the 128th (serde_json's recursion limit), and so does the codec |
+| ill-formed (section 5.1, a tag with no content included), invalid UTF-8 (per chunk), bytes after the item, nested 128 levels deep or deeper | 400, even where the body also holds something below that answers 422: a syntax error wins, as in `Json<T>` | not a valid CBOR item; `Json<T>` accepts 127 levels and refuses the 128th (serde_json's recursion limit), and so does the codec |
 | a byte string | 422 | JSON has no bytes; Kynos describes `Vec<u8>` as an array of integers, and a `contentEncoding: base64` string is text, not a byte string |
 | any tag | 422 | no JSON Schema form; a decoder that ignored it would accept a value the schema does not describe |
 | `undefined`, simple values other than `false`, `true`, `null` | 422 | no JSON value |
