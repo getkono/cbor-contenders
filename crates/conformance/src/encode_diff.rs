@@ -1,8 +1,9 @@
 //! Section `encode_diff`: every workload, encoded and decoded, against the
 //! serde_cbor oracle and the workload's own value.
 //!
-//! Encode side: `encode` and `encode_into` (into a buffer holding stale
-//! bytes, which must be cleared) must produce the oracle's bytes (preferred
+//! Encode side: `encode`, `encode_into` (into a buffer holding stale
+//! bytes, which must be cleared) and `to_writer` into Kynos's `BodyWriter`
+//! (the path a server's response takes) must produce the oracle's bytes (preferred
 //! serialization), or bytes the oracle reads into the workload's type as the
 //! same value (a float written wider than it needs is the same float): a
 //! non-gating difference, listed with the first differing offset. Anything
@@ -121,6 +122,13 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
                 B::encode_into(&value, &mut out).map(|()| out)
             });
             compare_encoding::<B, W>(section, &format!("{}#encode_into", W::NAME), &reference, into);
+            // What Kynos does with a `BodyCodec`'s encode: `to_writer` into its
+            // response buffer, then `finish`.
+            let written = guarded(|| {
+                let mut writer = codecs::writer::BodyWriter::new();
+                B::to_writer(&value, &mut writer).map(|()| writer.finish().to_vec())
+            });
+            compare_encoding::<B, W>(section, &format!("{}#to_writer", W::NAME), &reference, written);
         }
         let bytes = W::bytes(Format::Cbor);
         let expected = match W::EXPECT {
