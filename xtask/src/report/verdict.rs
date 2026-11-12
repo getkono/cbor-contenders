@@ -407,8 +407,8 @@ fn frontier(data: &Data, entry: &str) -> Clause {
     }
 }
 
-/// The depth `Json<T>` refuses past: serde_json's recursion limit, which the
-/// worked codec matches.
+/// The nesting `Json<T>` refuses: serde_json's recursion limit (it accepts
+/// 127 levels and refuses the 128th), which the worked codec matches.
 pub const JSON_DEPTH: u32 = 128;
 
 /// What a cell's `rejected` verdict means for clause 3. A `rejected` cell
@@ -418,8 +418,8 @@ pub const JSON_DEPTH: u32 = 128;
 /// - an operation the library does not have (`Unsupported`: ciborium has no
 ///   borrowing decode), or a workload a native format does not carry, is
 ///   recorded, not a wrong answer;
-/// - a refusal with a syntax status (400) of a `nested-N` workload deeper
-///   than [`JSON_DEPTH`] is the library's depth limit, which RFC 8949 leaves
+/// - a refusal with a syntax status (400) of a `nested-N` workload at least
+///   [`JSON_DEPTH`] deep is the library's depth limit, which RFC 8949 leaves
 ///   to the implementation and `Json<T>` itself refuses: recorded;
 /// - any other refusal is a wrong answer to a client, as a server answers
 ///   it: a body the oracle decodes and the library will not, or a value it
@@ -432,7 +432,7 @@ pub fn refusal_is_wrong(workload: &str, detail: &str) -> bool {
     let deep = workload
         .strip_prefix("nested-")
         .and_then(|d| d.parse::<u32>().ok())
-        .is_some_and(|d| d > JSON_DEPTH);
+        .is_some_and(|d| d >= JSON_DEPTH);
     // `Failure`'s display leads with its class; only `Data` answers 422.
     let syntax = !detail.starts_with("Data");
     !(deep && syntax)
