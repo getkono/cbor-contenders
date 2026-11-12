@@ -387,8 +387,9 @@ fn is_figure(token: &str, code: bool) -> bool {
 /// Figures written in the README's Findings without a link to the report row
 /// they come from. A number there is a claim, and every claim names its
 /// evidence. See [`is_figure`] for what a figure is; a list item's number
-/// ("1." at the start of a line) and a rule's number ("rule 1", "rules 1,
-/// 2 and 4", "rules 1–4", "rule 1's") are not figures. A link elsewhere may
+/// ("1." at the start of a line) and a rule's or clause's number ("rule 1",
+/// "rules 1, 2 and 4", "rules 1–4", "rule 1's", "clause 2") are not
+/// figures. A link elsewhere may
 /// name things ("ciborium#123"), but not quote figures.
 fn bare_figures(readme: &str) -> Vec<String> {
     let Some(start) = readme
@@ -477,7 +478,7 @@ fn bare_figures(readme: &str) -> Vec<String> {
         let token = possessive.unwrap_or(trimmed);
         let lower = token.to_lowercase();
         let list_item = first && !code && word.ends_with('.') && token.chars().all(|c| c.is_ascii_digit());
-        let rule = !code && rules && !unit_follows && matches!(token, "1" | "2" | "3" | "4");
+        let rule = !code && rules && !unit_follows && matches!(token, "1" | "2" | "3" | "4" | "5");
         if is_figure(token, code) && !rule && !list_item {
             failures.push(format!(
                 "Findings quotes {token} without a link to the report row it comes from"
@@ -486,7 +487,7 @@ fn bare_figures(readme: &str) -> Vec<String> {
         // A list of rule numbers runs on through "and", "or", "to" and
         // commas, and ends at any other word or at a colon or possessive.
         rules = !code
-            && (matches!(lower.as_str(), "rule" | "rules")
+            && (matches!(lower.as_str(), "rule" | "rules" | "clause" | "clauses")
                 || (rules
                     && (rule || matches!(lower.as_str(), "and" | "or" | "to"))
                     && possessive.is_none()
@@ -634,6 +635,12 @@ mod tests {
         assert!(!super::whole("2.93 MB", "2.93 M"));
         let refs = "## Findings\n\nSee [#123](https://github.com/x/y/issues/123), with serde_json 1.0.154 on 2026-10-15, a 64-bit build.\n";
         assert!(super::bare_figures(refs).is_empty(), "{:?}", super::bare_figures(refs));
+        let clauses = "## Findings\n\nClause 1 fails, and clauses 2 to 5 are pending; clause 5's list holds.\n";
+        assert!(
+            super::bare_figures(clauses).is_empty(),
+            "{:?}",
+            super::bare_figures(clauses)
+        );
         let ok = "## Findings\n\nUnder rules 1, 2 and 4 it holds.\n\n1. First, rule 1's test and rules 1–4 and rules 1 to 4.\n2. On `Zen`, see [ciborium#123](https://github.com/x) and [^1].\n";
         assert!(super::bare_figures(ok).is_empty(), "{:?}", super::bare_figures(ok));
     }
