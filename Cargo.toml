@@ -39,6 +39,13 @@ serde_cbor = { version = "=0.11.2", default-features = false, features = ["std"]
 # The framework the worked codec and the end-to-end server mount on, from
 # crates.io so the resolved version is provenance a reader can check.
 kynos = { version = "=0.5.0", default-features = false, features = ["openapi31", "macros", "server", "http1", "json", "protobuf"] }
+# The types Kynos describes as formatted strings, for tests only (each behind
+# a Kynos feature: uuid, time-chrono, time-jiff, decimal-rust), at the
+# versions Kynos's own lockfile resolves.
+uuid = { version = "=1.26.1", default-features = false, features = ["serde"] }
+chrono = { version = "=0.4.45", default-features = false, features = ["serde"] }
+jiff = { version = "=0.2.39", default-features = false, features = ["serde"] }
+rust_decimal = { version = "=1.43.0", default-features = false, features = ["serde"] }
 
 bytes = "1.12"
 sha2 = "0.10"
@@ -49,15 +56,9 @@ hyper = { version = "1", features = ["http1", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 http = "1"
-# The formatted-string types Kynos describes (its uuid1, time-chrono04,
-# time-jiff02, decimal-rust1 and decimal-big04 features), at the versions
-# Kynos's lockfile resolves. Conformance only: what each library writes for
-# them, and that the worked codec writes the string their schema describes.
-uuid = { version = "=1.26.1", default-features = false, features = ["std", "serde"] }
-chrono = { version = "=0.4.45", default-features = false, features = ["std", "serde"] }
-jiff = { version = "=0.2.39", default-features = false, features = ["std", "serde"] }
-rust_decimal = { version = "=1.43.0", default-features = false, features = ["std", "serde"] }
-bigdecimal = { version = "=0.4.11", default-features = false, features = ["std", "serde"] }
+# Kynos's decimal-big04 feature's type, beside the formatted-string types
+# above, at the version Kynos's lockfile resolves.
+bigdecimal = { version = "=0.4.11", default-features = false, features = ["serde"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

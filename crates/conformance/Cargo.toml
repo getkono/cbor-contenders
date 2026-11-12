@@ -27,12 +27,13 @@ serde_cbor.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 toml = "0.8"
-# Section `model`: the formatted-string types Kynos describes.
-uuid.workspace = true
-chrono.workspace = true
-jiff.workspace = true
-rust_decimal.workspace = true
-bigdecimal.workspace = true
+# Section `model`: the formatted-string types Kynos describes, with `std`
+# for their text forms.
+uuid = { workspace = true, features = ["std"] }
+chrono = { workspace = true, features = ["std"] }
+jiff = { workspace = true, features = ["std"] }
+rust_decimal = { workspace = true, features = ["std"] }
+bigdecimal = { workspace = true, features = ["std"] }
 
 # Only to switch core dumps off in a depth probe that may overflow its stack.
 [target.'cfg(unix)'.dependencies]
