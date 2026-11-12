@@ -2,11 +2,18 @@
 //! well-formed item the oracle reads as the same value, and the candidate
 //! must read the oracle's encoding back as the same value. `to_writer` into
 //! Kynos's `BodyWriter` must write exactly what `encode` does.
+//!
+//! `Value::Null` serializes as serde's unit, which a library may write
+//! otherwise than as CBOR `null` (minicbor-serde and cbor4ii write an empty
+//! array). That form is the library's, recorded by conformance's `model`
+//! section and written as `null` by the worked codec; here a null is
+//! expected in the form the backend writes `()` in, decided by encoding it,
+//! and counted ([`fuzz::Tally::UnitNotNull`]).
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
 use codecs::Backend;
-use fuzz::{Check, same};
+use fuzz::{Check, Tally, same, tally};
 use libfuzzer_sys::fuzz_target;
 use serde_cbor::Value;
 
@@ -32,6 +39,31 @@ fn value(u: &mut Unstructured<'_>, depth: u32) -> arbitrary::Result<Value> {
             Value::Map(map)
         }
     })
+}
+
+/// `value` with every null in the form a backend that writes `()` as an
+/// empty array reads back as, and whether it held one.
+fn unit_as_empty_array(value: &Value) -> (Value, bool) {
+    match value {
+        Value::Null => (Value::Array(Vec::new()), true),
+        Value::Array(items) => {
+            let (items, held): (Vec<_>, Vec<_>) = items.iter().map(unit_as_empty_array).unzip();
+            (Value::Array(items), held.contains(&true))
+        }
+        Value::Map(entries) => {
+            let mut held = false;
+            let entries = entries
+                .iter()
+                .map(|(k, v)| {
+                    let (v, h) = unit_as_empty_array(v);
+                    held |= h;
+                    (k.clone(), v)
+                })
+                .collect();
+            (Value::Map(entries), held)
+        }
+        other => (other.clone(), false),
+    }
 }
 
 struct Roundtrip;
@@ -61,7 +93,16 @@ impl Check for Roundtrip {
                 "candidate wrote an ill-formed item"
             );
             let parsed: Value = serde_cbor::from_slice(&encoded).expect("the oracle reads the candidate's output");
-            assert!(same(&parsed, &original), "candidate encoded a different value");
+            let expected = if B::encode(&()).is_ok_and(|unit| unit == [0x80]) {
+                let (expected, held) = unit_as_empty_array(&original);
+                if held {
+                    tally(Tally::UnitNotNull);
+                }
+                expected
+            } else {
+                original.clone()
+            };
+            assert!(same(&parsed, &expected), "candidate encoded a different value");
         }
         let reference = serde_cbor::to_vec(&original).expect("serde_cbor encodes any Value");
         if let Ok(back) = B::decode::<Value>(bytes::Bytes::from(reference)) {

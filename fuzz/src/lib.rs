@@ -114,15 +114,19 @@ pub enum Tally {
     /// A borrowed decode refused where the owned one was accepted: the
     /// candidate does not borrow this value.
     NotBorrowed,
+    /// A value holding a null encoded by a backend that writes unit (which
+    /// `Value::Null` serializes as) as an empty array, not `null`.
+    UnitNotNull,
 }
 
 impl Tally {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::TrailingIgnored,
         Self::IllFormedData,
         Self::RefusedWellFormed,
         Self::OtherClass,
         Self::NotBorrowed,
+        Self::UnitNotNull,
     ];
 
     fn name(self) -> &'static str {
@@ -132,11 +136,12 @@ impl Tally {
             Self::RefusedWellFormed => "refused-well-formed",
             Self::OtherClass => "other-class",
             Self::NotBorrowed => "not-borrowed",
+            Self::UnitNotNull => "unit-not-null",
         }
     }
 }
 
-static TALLIES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static TALLIES: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
 /// Count one `tally`. Each time the count reaches a power of two (so a long
 /// run's log stays short and still says how often) it is printed to stderr,
