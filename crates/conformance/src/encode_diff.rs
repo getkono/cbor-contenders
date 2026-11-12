@@ -23,7 +23,8 @@ use payloads::Workload;
 use serde_json::{Value, json};
 
 use crate::outcome::{
-    ARRIVALS, BorrowedForm, OnBorrowed, Outcome, Typed, borrowed, guarded, on_borrowed, owned, same_value, to_value,
+    ARRIVALS, BorrowedForm, OnBorrowed, Outcome, Typed, borrowed, borrows, guarded, on_borrowed, owned, same_value,
+    to_value,
 };
 use crate::record::Section;
 
@@ -135,11 +136,18 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
             payloads::Expect::Value => Some(to_value(&value)),
             payloads::Expect::Reject(_) => None,
         };
+        // For a `reject-*` workload, whether the library borrows the body it
+        // was damaged from: a library that does not refuses the damaged one
+        // borrowed before it reaches the damage, which says nothing about it.
+        let undamaged = match W::EXPECT {
+            payloads::Expect::Value => None,
+            payloads::Expect::Reject(_) => Some(borrows::<B, BorrowedForm<W>>(&payloads::cbor(&value))),
+        };
         for arrival in ARRIVALS {
             let owned = owned::<B, Typed<W::Owned>>(&bytes, arrival);
-            // The library borrows the workload unless it decodes the bytes
-            // owned and refuses them borrowed.
-            let borrows = !owned.is_accept();
+            // Otherwise the library borrows the workload unless it decodes
+            // the bytes owned and refuses them borrowed.
+            let borrows = undamaged.unwrap_or(!owned.is_accept());
             let paths = [
                 ("owned", owned),
                 ("borrowed", borrowed::<B, BorrowedForm<W>>(&bytes, arrival)),
