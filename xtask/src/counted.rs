@@ -197,7 +197,8 @@ impl Filter {
     }
 }
 
-fn jobs(args: &[String], default: usize) -> usize {
+/// `--jobs N`, else `default`.
+pub fn jobs(args: &[String], default: usize) -> usize {
     args.iter()
         .position(|a| a == "--jobs")
         .and_then(|i| args.get(i + 1))

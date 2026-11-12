@@ -63,6 +63,7 @@ pub fn count(args: &[String]) -> Result<()> {
     }
     let filter = Filter::parse(args);
     let requests = 200;
+    let threads = crate::counted::jobs(args, 8);
     let mut rows = Vec::new();
     for variant in filter.variants().into_iter().filter(|v| v.valgrind) {
         for set in served(&filter) {
@@ -106,7 +107,7 @@ pub fn count(args: &[String]) -> Result<()> {
                     }));
                 }
             }
-            rows.extend(parallel(8, jobs));
+            rows.extend(parallel(threads, jobs));
         }
     }
     let path = root()
