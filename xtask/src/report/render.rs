@@ -452,8 +452,9 @@ fn conformance_section(data: &Data, out: &mut String) {
         out,
         "conformance",
         "Conformance",
-        "Gating failures per section and variant. A section's every disagreement and its first \
-         listings are in `data/conformance.csv`; a gating failure is a silent difference (README, \
+        "Gating failures per section and variant. Each section's cases and disagreements are in \
+         `data/conformance-sections.csv`, its recorded differences in \
+         `data/conformance-differences.csv`; a gating failure is a silent difference (README, \
          Conformance).",
     );
     let mut sections: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();

@@ -513,8 +513,8 @@ pub fn merge_rows(path: &std::path::Path, rows: &[Value], kind: &str) -> Result<
 
 /// `xtask alloc`: allocation counts on the host, every variant.
 ///
-/// Only at `native` unless `--variants` says otherwise: allocation counts do
-/// not depend on the target CPU, and the report reads `native`.
+/// Only at `portable` unless `--variants` says otherwise: allocation counts
+/// do not depend on the target CPU, and the report reads `portable`.
 pub fn alloc(args: &[String]) -> Result<()> {
     crate::doctor::require()?;
     let mut args = args.to_vec();

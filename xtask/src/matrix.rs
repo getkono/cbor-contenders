@@ -229,7 +229,7 @@ pub fn for_workload(backend: &str, workload: &str, shapes: &'static [Shape]) -> 
 /// exactly these.
 pub const COUNTED_VARIANTS: &[&str] = &["portable"];
 
-/// The variant whose hardware cycles decide rule 1.
+/// The variant whose hardware cycles decide clause 2.
 pub const DECIDING_VARIANT: &str = "portable";
 
 /// The shapes hardware cycles are taken at for `workload`: the server's own

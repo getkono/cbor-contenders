@@ -3,9 +3,9 @@
 //!
 //! Every cell of a round runs as its own process, in an order shuffled per
 //! round, so drift over a session spreads across backends instead of
-//! landing on whichever ran last. serde_json runs twice per round as an A/A
-//! control; the gap between its two copies is the noise floor a difference
-//! must clear.
+//! landing on whichever ran last. Each baseline, serde_json and prost, runs
+//! twice per round as an A/A control; the gap between its two copies is the
+//! noise floor a difference from it must clear.
 
 use std::process::Command;
 
@@ -73,7 +73,7 @@ pub fn time(args: &[String]) -> Result<()> {
 /// `xtask hw`: hardware cycle and instruction counters at `portable` (which
 /// decides) and `native` (for information), every workload and shape, under
 /// the same protocol as [`time`]: one pinned process at a time, rounds in
-/// shuffled order, an A/A copy of each baseline. The cycles decide rule 1,
+/// shuffled order, an A/A copy of each baseline. The cycles decide clause 2,
 /// so a run is `solo` unless it claims `canonical`, which a loaded host is
 /// refused.
 pub fn hw(args: &[String]) -> Result<()> {
@@ -403,7 +403,7 @@ fn rounds(
                 .all(|r| matches!(r["verdict"].as_str(), Some("rejected" | "unsupported" | "wrong")))
             {
                 // Not measured, by the backend's own answer (a rejection, or a
-                // wrong result, which rule 2 reads): recorded as such.
+                // wrong result, which clause 3 reads): recorded as such.
             } else {
                 row["error"] = json!("a round failed or was refused; see rounds");
             }

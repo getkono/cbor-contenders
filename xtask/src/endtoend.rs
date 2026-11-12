@@ -183,7 +183,7 @@ fn start(exe: &std::path::Path, backend: &str, port: u16) -> Result<Server> {
 /// which every request was answered, but not with the route's status,
 /// records the verdict `wrong`: a server that answers every request with a
 /// 400 is fast, and nothing about its timing is a figure, but the wrong
-/// answer is a result (rule 2 reads it). An open-loop run
+/// answer is a result (clause 3 reads it). An open-loop run
 /// the server could not keep up with is marked `saturated`: its latency is
 /// that of an overloaded server, not of the rate, so it is no p99 figure,
 /// but a backend too slow for the rate is a result, not a failed run.
@@ -234,7 +234,7 @@ fn oha(
         .map_or(0, |e| e.keys().filter(|k| *k != "aborted due to deadline").count());
     let rps = v["summary"]["requestsPerSec"].as_f64();
     // Every request answered, but not with the route's status: the backend
-    // answered wrongly, which is a result (rule 2 reads it), not a failed
+    // answered wrongly, which is a result (clause 3 reads it), not a failed
     // run. Failed requests are a failed run.
     let answered = v["summary"]["successRate"].as_f64() == Some(1.0) && errors == 0;
     let verdict = (answered && !only_expected).then_some("wrong");
@@ -329,7 +329,8 @@ pub const SECONDS: u64 = 30;
 
 /// `xtask e2e-time`: closed-loop throughput, then open-loop latency at 70 % of
 /// serde_json's throughput on the same route, `--reps` times (default 5),
-/// with serde_json run twice per rep as the A/A control.
+/// with each baseline, serde_json and prost, run twice per rep as the A/A
+/// control.
 pub fn time(args: &[String]) -> Result<()> {
     let mut filter = Filter::parse(args);
     if filter.variants.is_none() {
