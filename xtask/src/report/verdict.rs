@@ -18,9 +18,10 @@
 //!    no wrong answer in any measured cell or end-to-end route, no fuzz
 //!    divergence, no undefined behaviour under Miri, and the worked codec's
 //!    section 5 profile held on every case.
-//! 4. No open soundness issue, no advisory affecting the pinned version, and
-//!    a maintained crate (a release or substantive commit within twelve
-//!    months of `results/maintenance.toml`'s `as_of` date).
+//! 4. No open soundness issue, no advisory affecting the pinned version, no
+//!    memory error found while fuzzing, and a maintained crate (a release or
+//!    a commit that changes its code within twelve months of
+//!    `results/maintenance.toml`'s `as_of` date).
 //! 5. A licence Kynos's policy accepts (`references/kynos-deny-allow.txt`).
 //!
 //! Each clause is `pass`, `fail` or `pending` (its evidence is not all
@@ -631,8 +632,8 @@ fn days(date: &str) -> Option<i64> {
     Some(365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + d)
 }
 
-/// Whether `krate` had a release or a substantive commit within 365 days of
-/// the file's `as_of`.
+/// Whether `krate` had a release or a commit that changes its code
+/// (`last_substantive_commit`) within 365 days of the file's `as_of`.
 pub fn maintained(data: &Data, krate: &str) -> Option<bool> {
     let as_of = days(data.maintenance.get("as_of")?.as_str()?)?;
     let entry = data.maintenance.get(krate)?;
@@ -940,6 +941,20 @@ mod tests {
         assert!(licence_ok("((MIT))", &allowed));
         for broken in ["", "MIT OR", "(MIT", "MIT)", "AND MIT", "MIT WITH", "MIT Apache-2.0"] {
             assert!(!licence_ok(broken, &allowed), "{broken:?}");
+        }
+    }
+
+    /// The committed file, read as clause 4 reads it: ciborium's last
+    /// release and last code change are both older than twelve months; every
+    /// other candidate released within them.
+    #[test]
+    fn the_committed_maintenance_file_fails_ciborium_alone() {
+        let data = Data {
+            maintenance: toml::from_str(include_str!("../../../results/maintenance.toml")).unwrap(),
+            ..Data::default()
+        };
+        for (_, krate, _) in candidates() {
+            assert_eq!(maintained(&data, krate), Some(krate != "ciborium"), "{krate}");
         }
     }
 
