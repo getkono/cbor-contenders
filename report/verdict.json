@@ -12,17 +12,17 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
           "outcome": "pending",
-          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+          "why": "not measured: conformance at portable, conformance at native, no callgrind cells, no alloc cells, no hw cells, no time cells, no e2e-count routes, no e2e-time routes, fuzzing decode_value, fuzzing decode_struct, fuzzing roundtrip, Miri"
         },
         {
           "clause": 4,
-          "outcome": "pending",
-          "why": "no footprint"
+          "outcome": "fail",
+          "why": "no release or code change within twelve months"
         },
         {
           "clause": 5,
@@ -44,12 +44,12 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
           "outcome": "pending",
-          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+          "why": "not measured: conformance at portable, conformance at native, no callgrind cells, no alloc cells, no hw cells, no time cells, no e2e-count routes, no e2e-time routes, fuzzing decode_value, fuzzing decode_struct, fuzzing roundtrip, Miri"
         },
         {
           "clause": 4,
@@ -76,7 +76,7 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
@@ -108,12 +108,12 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
           "outcome": "pending",
-          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+          "why": "not measured: conformance at portable, conformance at native, no callgrind cells, no alloc cells, no hw cells, no time cells, no e2e-count routes, no e2e-time routes, fuzzing decode_value, fuzzing decode_struct, fuzzing roundtrip, Miri"
         },
         {
           "clause": 4,
@@ -140,12 +140,12 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
           "outcome": "pending",
-          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+          "why": "not measured: conformance at portable, conformance at native, no callgrind cells, no alloc cells, no hw cells, no time cells, no e2e-count routes, no e2e-time routes, fuzzing decode_value, fuzzing decode_struct, fuzzing roundtrip, Miri"
         },
         {
           "clause": 4,
@@ -172,12 +172,12 @@
         {
           "clause": 2,
           "outcome": "pending",
-          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap bytes at json-small, encode heap bytes at json-small, encoded size at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap bytes at echo-post, encode heap bytes at echo-post, encoded size at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap bytes at json-large, encode heap bytes at json-large, encoded size at json-large"
+          "why": "not measured: decode cycles at json-small, encode cycles at json-small, decode heap blocks at json-small, decode heap bytes at json-small, encode heap blocks at json-small, encode heap bytes at json-small, encoded size at json-small, encoded size gzip at json-small, encoded size zstd at json-small, decode cycles at echo-post, encode cycles at echo-post, decode heap blocks at echo-post, decode heap bytes at echo-post, encode heap blocks at echo-post, encode heap bytes at echo-post, encoded size at echo-post, encoded size gzip at echo-post, encoded size zstd at echo-post, decode cycles at json-large, encode cycles at json-large, decode heap blocks at json-large, decode heap bytes at json-large, encode heap blocks at json-large, encode heap bytes at json-large, encoded size at json-large, encoded size gzip at json-large, encoded size zstd at json-large"
         },
         {
           "clause": 3,
           "outcome": "pending",
-          "why": "not measured: conformance at portable, conformance at native, fuzzing, Miri"
+          "why": "not measured: conformance at portable, conformance at native, no callgrind cells, no alloc cells, no hw cells, no time cells, no e2e-count routes, no e2e-time routes, fuzzing decode_value, fuzzing decode_struct, fuzzing roundtrip, Miri"
         },
         {
           "clause": 4,
