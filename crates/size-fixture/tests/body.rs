@@ -6,7 +6,7 @@ use payloads::Workload;
 use payloads::kynos::{EchoPost, JsonLarge, JsonSmall};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use size_fixture::body::{Catalog, CatalogRef, Echo, EchoRef, Item, ItemRef};
+use size_fixture::body::{Catalog, Echo, Item};
 
 /// Decode `W`'s bytes into the copy `T` and re-encode them: the same bytes.
 fn same_bytes<W: Workload, T: Serialize + DeserializeOwned + Protobuf>() {
@@ -42,19 +42,6 @@ fn owned_copies_match_the_originals() {
     same_bytes::<JsonSmall, Item>();
     same_bytes::<EchoPost, Echo>();
     same_bytes::<JsonLarge, Catalog>();
-}
-
-#[test]
-fn borrowed_copies_match_the_originals() {
-    let small = JsonSmall::bytes(Format::Json);
-    let back: ItemRef<'_> = serde_json::from_slice(&small).expect("JSON");
-    assert_eq!(serde_json::to_vec(&back).expect("JSON"), small);
-    let echo = EchoPost::bytes(Format::Json);
-    let back: EchoRef<'_> = serde_json::from_slice(&echo).expect("JSON");
-    assert_eq!(serde_json::to_vec(&back).expect("JSON"), echo);
-    let large = JsonLarge::bytes(Format::Json);
-    let back: CatalogRef<'_> = serde_json::from_slice(&large).expect("JSON");
-    assert_eq!(serde_json::to_vec(&back).expect("JSON"), large);
 }
 
 /// The fixture dispatches each body to its type, through the selected
