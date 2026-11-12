@@ -1,6 +1,7 @@
 //! An arbitrary value, encoded by the candidate: the output must be one
 //! well-formed item the oracle reads as the same value, and the candidate
-//! must read the oracle's encoding back as the same value.
+//! must read the oracle's encoding back as the same value. `to_writer` into
+//! Kynos's `BodyWriter` must write exactly what `encode` does.
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -40,7 +41,21 @@ impl Check for Roundtrip {
         let Ok(original) = value(&mut Unstructured::new(data), 0) else {
             return;
         };
-        if let Ok(encoded) = B::encode(&original) {
+        let encoded = B::encode(&original);
+        // The path a Kynos response takes: `to_writer` into its
+        // `BodyWriter`, then `finish`. The same bytes as `encode`, or the
+        // same refusal.
+        let mut writer = codecs::writer::BodyWriter::new();
+        let written = B::to_writer(&original, &mut writer).map(|()| writer.finish());
+        match (&encoded, &written) {
+            (Ok(encoded), Ok(written)) => assert!(
+                encoded[..] == written[..],
+                "to_writer into BodyWriter wrote other bytes than encode"
+            ),
+            (Err(_), Err(_)) => {}
+            _ => panic!("encode and to_writer disagree on whether the value encodes: {encoded:?} vs {written:?}"),
+        }
+        if let Ok(encoded) = encoded {
             assert!(
                 faithful::well_formed(&encoded).is_ok(),
                 "candidate wrote an ill-formed item"

@@ -1,9 +1,9 @@
-use std::borrow::Cow;
-
 use codecs::Format;
 use sha2::{Digest, Sha256};
 
 use super::*;
+
+mod borrows;
 
 fn sha(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
@@ -196,6 +196,45 @@ fn sweep_bodies_are_exactly_their_size_in_cbor() {
     }
 }
 
+/// The construction is exact for any target, not only the eight the sweep
+/// names, and pads by less than one record: every size from the floor to
+/// 2 KiB, every power of two to 1 MiB and its neighbours, and the sizes
+/// either side of each step a head widens at.
+#[test]
+fn sweep_construction_is_exact_for_any_size_and_pads_less_than_a_record() {
+    let floor = crate::cbor(&vec![kynos::Item {
+        name: String::new(),
+        tags: Vec::new(),
+        ..kynos::item(0)
+    }])
+    .len();
+    let largest = (0..20_000)
+        .map(|i| crate::cbor(&kynos::item(i)).len())
+        .max()
+        .unwrap_or(0);
+    let mut sizes: Vec<usize> = (floor..=2048).collect();
+    for shift in 6..=20 {
+        let power = 1usize << shift;
+        sizes.extend([power - 1, power, power + 1, power + 3]);
+    }
+    for edge in [24 * 75, 256 * 75, 65_536 * 75 / 8] {
+        sizes.extend(edge - 200..edge + 200);
+    }
+    sizes.extend([
+        65_535 + floor,
+        65_536 + floor,
+        65_537 + floor,
+        65_538 + floor,
+        65_539 + floor,
+    ]);
+    for size in sizes {
+        let items = sweep::records(size);
+        assert_eq!(crate::cbor(&items).len(), size, "{size}");
+        let padding = items[0].name.len() + items[0].tags.iter().map(String::len).sum::<usize>();
+        assert!(padding < largest, "{size}: {padding} bytes of padding");
+    }
+}
+
 /// Each written-by-hand nested body is what the serializers write for the
 /// value, on a stack deep enough for serde's recursion.
 fn check_nested<const D: u32>() {
@@ -239,10 +278,11 @@ fn cbor_writes_bytes_as_byte_strings_and_json_as_base64() {
         blob[&serde_cbor::Value::Text("data".into())],
         serde_cbor::Value::Bytes(first.data.clone())
     );
-    // The borrowed form borrows the bytes from a CBOR body.
+    // The borrowed form reads the bytes from a CBOR body (`borrows` checks
+    // they are a slice of it).
     let bytes = blob::ByteStrings::bytes(Format::Cbor);
     let borrowed: blob::BlobsRef<'_> = serde_cbor::from_slice(&bytes).expect("borrowed");
-    assert!(matches!(borrowed.blobs[0].data, Cow::Borrowed(_)));
+    assert_eq!(borrowed.blobs[0].data, first.data);
 }
 
 #[test]
@@ -338,6 +378,23 @@ fn cbor_corpora_are_preferred_serialization() {
             "nested-255" | "nested-257" | "nested-10000" => assert_eq!(profile, Err(faithful::Rule::TooDeep)),
             _ => assert_eq!(profile, Ok(()), "{name}"),
         }
+    }
+}
+
+/// A workload reports under `Rejection` exactly when its bytes must be
+/// refused.
+#[test]
+fn rejections_are_their_own_group() {
+    struct Grouped;
+    impl Visit for Grouped {
+        type Output = (Group, Expect);
+        fn visit<W: Workload>(self) -> (Group, Expect) {
+            (W::GROUP, W::EXPECT)
+        }
+    }
+    for name in ALL {
+        let (group, expect) = dispatch(name, Grouped).expect("dispatches");
+        assert_eq!(group == Group::Rejection, expect != Expect::Value, "{name}");
     }
 }
 

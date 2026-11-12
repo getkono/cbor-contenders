@@ -8,10 +8,23 @@
 //! (`kynos-cbor`: [`faithful::scan`] before a decode, [`faithful::Faithful`]
 //! around an encode).
 //!
-//! Gates, against the worked codec only: a case with no faithful schema that
-//! its profile lets through, or a case inside the data model that it
-//! refuses. The libraries' bare answers are findings, not gates: a codec that
-//! is faithful has to be written around them, and this section says where.
+//! Gates, against the worked codec only. On decode the gate tests
+//! `faithful`'s profile, not the library: a body with no faithful schema that
+//! [`faithful::scan`] lets through, or a body inside the data model it
+//! refuses (what the library then makes of a body the scan passed is its
+//! bare answer, recorded beside it). On encode it tests the codec's whole
+//! path, the library writing through [`faithful::Faithful`]: a value with no
+//! faithful schema written, or one inside the data model refused. The
+//! libraries' bare answers are findings, not gates: a codec that is faithful
+//! has to be written around them, and this section says where, including
+//! each tag a library writes on its own.
+//!
+//! The types Kynos describes as formatted strings (`Uuid`, the IP address
+//! types, chrono's `DateTime<Utc>` and `NaiveDate`, jiff's `Timestamp`,
+//! `rust_decimal::Decimal`, `BigDecimal`) are their own table
+//! ([`formatted_case`]): bare, what each library writes and whether it reads
+//! the schema's string back, recorded; through the worked codec, the string
+//! written and read back, gated.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +33,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::cases::{decode, hex};
-use crate::outcome::guarded;
+use crate::outcome::{ARRIVALS, Outcome, Target, Typed, guarded, owned};
 use crate::record::Section;
 
 /// `(case, body, the target a handler would declare, what a faithful schema
@@ -41,6 +54,14 @@ const DECODE: &[(&str, &str, &str, Option<&str>)] = &[
         Some("array of uint8"),
     ),
     ("text into serde_bytes", "63 616263", "bytes", Some("string")),
+    ("a byte string into bytes::Bytes", "43 010203", "bytes-crate", None),
+    ("text into Vec<u8>", "63 616263", "byte-vec", Some("string")),
+    (
+        "enum map keys into BTreeMap<enum, _>",
+        "a1 65 416c706861 02",
+        "enum-map",
+        Some("object"),
+    ),
     (
         "integer map keys into BTreeMap<u64, _>",
         "a2 01 02 03 04",
@@ -118,9 +139,48 @@ const DECODE: &[(&str, &str, &str, Option<&str>)] = &[
 ];
 
 /// A map key that is an enum's unit variant, written as its name.
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Serialize, serde::Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
     Alpha,
+}
+
+/// `bytes::Bytes` (its `serde` feature), rendered as hex.
+#[derive(Debug)]
+pub struct BytesCrate;
+
+impl Target for BytesCrate {
+    type Out<'de> = bytes::Bytes;
+    fn view(out: &bytes::Bytes) -> Value {
+        Value::String(hex::encode(out))
+    }
+}
+
+/// The library's own decode of `bytes` into `target`: [`decode`]'s targets
+/// and this section's own.
+fn library<B: Backend>(target: &str, bytes: &[u8]) -> Outcome {
+    match target {
+        "bytes-crate" => owned::<B, BytesCrate>(bytes, ARRIVALS[0]),
+        "enum-map" => owned::<B, Typed<BTreeMap<Key, u32>>>(bytes, ARRIVALS[0]),
+        _ => decode::<B>(target, bytes),
+    }
+}
+
+/// The tag number an encoding starts with, if it starts with one.
+fn leading_tag(bytes: &[u8]) -> Option<u64> {
+    let (&first, rest) = bytes.split_first()?;
+    if first >> 5 != 6 {
+        return None;
+    }
+    let width = match first & 0x1f {
+        info @ 0..=23 => return Some(u64::from(info)),
+        24 => 1,
+        25 => 2,
+        26 => 4,
+        27 => 8,
+        _ => return None,
+    };
+    let argument = rest.get(..width)?;
+    Some(argument.iter().fold(0, |n, b| n << 8 | u64::from(*b)))
 }
 
 /// The encode cases: a value, its case, and whether a faithful schema
@@ -128,7 +188,11 @@ enum Key {
 fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
     fn bare<B: Backend, T: Serialize>(value: &T) -> Value {
         match guarded(|| B::encode(value)) {
-            Ok(Ok(bytes)) => json!({ "hex": hex::encode(&bytes), "major": bytes.first().map(|b| b >> 5) }),
+            Ok(Ok(bytes)) => json!({
+                "hex": hex::encode(&bytes),
+                "major": bytes.first().map(|b| b >> 5),
+                "tag": leading_tag(&bytes),
+            }),
             Ok(Err(failure)) => json!({ "refused": failure.message }),
             Err(panic) => json!({ "panic": panic }),
         }
@@ -159,12 +223,132 @@ fn encode_cases<B: Backend>() -> Vec<(&'static str, Value, Value, bool)> {
         case!("BTreeMap<enum, u32>", BTreeMap::from([(Key::Alpha, 2u32)]), true),
         case!("f64::NAN", f64::NAN, false),
         case!("f64::INFINITY", f64::INFINITY, false),
+        case!("1u128", 1u128, false),
         case!("u128::MAX", u128::MAX, false),
         case!("i128::MIN", i128::MIN, false),
         case!("Option::<u8>::None", None::<u8>, true),
         case!("()", (), true),
         case!("u64::MAX", u64::MAX, true),
     ]
+}
+
+/// What one formatted-string type does, bare and through the worked codec.
+///
+/// The form Kynos's schema describes for each is a string with a `format`
+/// (`uuid`, `ipv4`, `ipv6`, `date-time`, `date`, and a decimal string), the
+/// text serde_json writes for it. Bare, each library is asked what it writes
+/// (its hex, whether it is a tag, whether it is a text string) and whether
+/// it reads that text back as the value: recorded, since a serializer that
+/// says it is not human-readable is told to write the compact form (a UUID's
+/// 16 bytes, an address's octets) and many do. Through the worked codec
+/// (`Faithful` around the encode, which presents a human-readable view,
+/// and `scan` then `Profiled<T>` around the decode, which does too), each
+/// must be written as a text string equal to that JSON string, and that
+/// text must decode to the same value: gated.
+fn formatted_case<B, T>(section: &mut Section, what: &str, value: &T) -> Value
+where
+    B: Backend,
+    T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    section.case();
+    let Ok(Value::String(json)) = serde_json::to_value(value) else {
+        section.fail(what, "serde_json does not write this type as a string");
+        return json!({ "case": what, "json": null });
+    };
+    let text = payloads::cbor(&json);
+    let as_text = |bytes: &[u8]| {
+        serde_cbor::from_slice::<serde_cbor::Value>(bytes).ok() == Some(serde_cbor::Value::Text(json.clone()))
+    };
+    let reads_back = |outcome: Result<Result<T, codecs::Failure>, String>| match outcome {
+        Ok(Ok(back)) if back == *value => json!("the same value"),
+        Ok(Ok(back)) => json!({ "another value": format!("{back:?}") }),
+        Ok(Err(failure)) => json!({ "refused": failure.status(), "message": failure.message }),
+        Err(panic) => json!({ "panic": panic }),
+    };
+    let bare_encode = if B::ENCODES {
+        match guarded(|| B::encode(value)) {
+            Ok(Ok(bytes)) => json!({
+                "hex": hex::encode(&bytes),
+                "major": bytes.first().map(|b| b >> 5),
+                "tag": leading_tag(&bytes),
+                "text": as_text(&bytes),
+            }),
+            Ok(Err(failure)) => json!({ "refused": failure.message }),
+            Err(panic) => json!({ "panic": panic }),
+        }
+    } else {
+        Value::Null
+    };
+    let bare_decode = reads_back(guarded(|| B::decode::<T>(bytes::Bytes::copy_from_slice(&text))));
+    let codec_encode = if B::ENCODES {
+        let mut out = Vec::new();
+        let written = guarded(|| B::to_writer(&faithful::Faithful(value), &mut out));
+        let record = match written {
+            Ok(Ok(())) => json!({ "hex": hex::encode(&out), "text": as_text(&out) }),
+            Ok(Err(failure)) => json!({ "refused": failure.message }),
+            Err(panic) => json!({ "panic": panic }),
+        };
+        if record["text"] != json!(true) {
+            let case = format!("{what}#codec-encode");
+            section.differ(&case, json!({ "text": json }), record.clone());
+            section.fail(&case, "the worked codec does not write the string the schema describes");
+        }
+        record
+    } else {
+        Value::Null
+    };
+    let codec_decode = reads_back(guarded(|| {
+        faithful::scan(&text)
+            .map_err(|refusal| codecs::Failure::new(codecs::Class::Syntax, refusal))
+            .and_then(|()| B::decode::<faithful::Profiled<T>>(bytes::Bytes::copy_from_slice(&text)))
+            .map(|profiled| profiled.0)
+    }));
+    if codec_decode != json!("the same value") {
+        let case = format!("{what}#codec-decode");
+        section.differ(&case, json!("the same value"), codec_decode.clone());
+        section.fail(&case, "the worked codec does not read the string the schema describes");
+    }
+    json!({
+        "case": what,
+        "json": json,
+        "library": { "encode": bare_encode, "decode_text": bare_decode },
+        "codec": { "encode": codec_encode, "decode_text": codec_decode },
+    })
+}
+
+/// [`formatted_case`] for every type Kynos describes as a formatted string.
+fn formatted<B: Backend>(section: &mut Section) -> Vec<Value> {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    let v4 = Ipv4Addr::new(192, 0, 2, 1);
+    let v6 = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
+    let instant = 1_363_896_240;
+    let mut out = vec![
+        formatted_case::<B, _>(
+            section,
+            "uuid::Uuid",
+            &uuid::Uuid::from_u128(0x67e5_5044_10b1_426f_9247_bb68_0e5f_e0c8),
+        ),
+        formatted_case::<B, _>(section, "Ipv4Addr", &v4),
+        formatted_case::<B, _>(section, "Ipv6Addr", &v6),
+        formatted_case::<B, _>(section, "IpAddr (V4)", &IpAddr::V4(v4)),
+        formatted_case::<B, _>(section, "IpAddr (V6)", &IpAddr::V6(v6)),
+    ];
+    if let Some(at) = chrono::DateTime::<chrono::Utc>::from_timestamp(instant, 0) {
+        out.push(formatted_case::<B, _>(section, "chrono::DateTime<Utc>", &at));
+        out.push(formatted_case::<B, _>(section, "chrono::NaiveDate", &at.date_naive()));
+    }
+    if let Ok(at) = jiff::Timestamp::from_second(instant) {
+        out.push(formatted_case::<B, _>(section, "jiff::Timestamp", &at));
+    }
+    out.push(formatted_case::<B, _>(
+        section,
+        "rust_decimal::Decimal",
+        &rust_decimal::Decimal::new(12_345, 3),
+    ));
+    if let Ok(decimal) = "12.345".parse::<bigdecimal::BigDecimal>() {
+        out.push(formatted_case::<B, _>(section, "bigdecimal::BigDecimal", &decimal));
+    }
+    out
 }
 
 /// Run the section.
@@ -175,7 +359,7 @@ pub fn run<B: Backend>() -> Section {
     for (what, text, target, schema) in DECODE {
         let bytes = hex(text);
         section.case();
-        let library = decode::<B>(target, &bytes).describe();
+        let library = library::<B>(target, &bytes).describe();
         let profile = faithful::scan(&bytes);
         let refused = profile.is_err();
         if refused == schema.is_some() {
@@ -193,7 +377,7 @@ pub fn run<B: Backend>() -> Section {
             "target": target,
             "schema": schema,
             "library": library,
-            "codec": profile.map_or_else(|r| json!({ "refused": r.status(), "rule": format!("{:?}", r.rule) }), |()| json!("decodes")),
+            "codec": profile.map_or_else(|r| json!({ "refused": r.status(), "rule": format!("{:?}", r.rule) }), |()| json!("passes the profile")),
         }));
     }
     let mut encoded = Vec::new();
@@ -215,7 +399,37 @@ pub fn run<B: Backend>() -> Section {
             encoded.push(json!({ "case": what, "faithful": schema, "library": library, "codec": codec }));
         }
     }
+    let formatted = formatted::<B>(&mut section);
+    section.data("formatted", Value::Array(formatted));
     section.data("decode", Value::Array(decoded));
     section.data("encode", Value::Array(encoded));
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use codecs::backend::serde_cbor::SerdeCbor;
+
+    use super::*;
+
+    #[test]
+    fn the_worked_codec_over_the_oracle_holds_the_profile() {
+        let section = run::<SerdeCbor>();
+        assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+        let (record, _) = section.finish();
+        let formatted = record["data"]["formatted"].as_array().cloned().unwrap_or_default();
+        assert_eq!(formatted.len(), 10, "{formatted:#?}");
+        // Bare, the oracle is not human-readable: a UUID is 16 bytes.
+        assert_eq!(formatted[0]["library"]["encode"]["major"], 2, "{:#}", formatted[0]);
+        assert_eq!(formatted[0]["json"], "67e55044-10b1-426f-9247-bb680e5fe0c8");
+    }
+
+    #[test]
+    fn a_leading_tag_is_read_at_every_width() {
+        assert_eq!(leading_tag(&hex("c2 41 01")), Some(2));
+        assert_eq!(leading_tag(&hex("d8 63 01")), Some(0x63));
+        assert_eq!(leading_tag(&hex("d9 d9f7 01")), Some(55799));
+        assert_eq!(leading_tag(&hex("da 00010000 01")), Some(0x1_0000));
+        assert_eq!(leading_tag(&hex("01")), None);
+    }
 }

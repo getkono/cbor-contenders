@@ -2,18 +2,31 @@
 //! crashes first.
 //!
 //! A stack overflow aborts the process, so every probe runs in a child: the
-//! `conform` binary re-executed as `conform depth-probe <backend>
-//! <array|object> <depth> <value|ignored> <stack_bytes>`, decoding on a
-//! thread with that stack. The child exits 0 for accepted, 10 for rejected
-//! (printing the status), anything else — or death by a signal — is a crash.
+//! `conform` binary re-executed as `conform depth-probe <backend> <shape>
+//! <depth> <target> <stack_bytes>`, decoding (or encoding) on a thread with
+//! that stack. The child exits 0 for accepted, 10 for rejected (printing the
+//! status), anything else — or death by a signal — is a crash.
+//!
+//! The documents nest arrays and maps, of definite and of indefinite length,
+//! and are decoded into a generic `serde_json::Value`, into `IgnoredAny`, and
+//! into a recursive derived struct (the shape an application's own tree
+//! type has). The `nested-*` workloads are probed too, on the same stacks:
+//! decoded into their type owned and borrowed, and encoded from their value.
+//! These are the stack sizes a server's worker threads run on, so a
+//! workload `encode_diff` checks on its large suite stack is also on record
+//! here at the size that matters.
+//!
 //! The limit itself is recorded, never gated: RFC 8949 sets none, and each
-//! library's (or its absence) is a choice. A crash gates (a body a client
-//! sends must not take the server down), and so does a rejection answered
-//! with 422, since nesting too deep is not a wrong shape. The reference
-//! column is the serde_cbor oracle's (limit 128).
+//! library's (or its absence) is a choice. A crash while decoding gates (a
+//! body a client sends must not take the server down), and so does a
+//! rejection answered with 422, since nesting too deep is not a wrong shape.
+//! A crash while encoding is recorded, not gated: the value is the
+//! application's own, and every serializer, serde_json's included, recurses
+//! with it. The reference column is the serde_cbor oracle's (limit 128).
 
 use std::collections::BTreeMap;
 use std::io::Read;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
@@ -21,7 +34,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use codecs::backend::serde_cbor::SerdeCbor;
-use codecs::{Backend, Visit};
+use codecs::{Backend, Body, Format, Visit};
+use payloads::Workload;
+use serde::Deserialize;
 use serde::de::IgnoredAny;
 use serde_json::{Value, json};
 
@@ -30,6 +45,8 @@ use crate::record::Section;
 /// Nesting depths probed: serde_cbor and serde_json stop at 128; ciborium,
 /// cbor4ii and cbor2 at 256.
 pub const DEPTHS: [usize; 11] = [100, 127, 128, 129, 200, 255, 256, 1000, 1025, 10_000, 1_000_000];
+/// The `nested-*` workloads' depths.
+pub const WORKLOAD_DEPTHS: [usize; 4] = [100, 255, 257, 10_000];
 /// Decode thread stacks: a small server worker's, and the main thread's.
 pub const STACKS: [usize; 2] = [2 << 20, 8 << 20];
 /// A probe running longer than this is recorded as a crash.
@@ -39,13 +56,21 @@ pub const PARALLEL: usize = 2;
 /// The child's exit code for a rejected document.
 pub const REJECTED: u8 = 10;
 
-/// The container nested.
+/// The document nested.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     /// `[[[...]]]`: `0x81` repeated, `0x80` innermost.
     Array,
     /// `{"a":{"a":...}}`: `0xa1 0x61 0x61` repeated, `null` innermost.
     Object,
+    /// `[_ [_ [_ ...]]]`: `0x9f` repeated, then as many breaks.
+    IndefiniteArray,
+    /// `{_ "a": {_ "a": ...}}`: `0xbf 0x61 0x61` repeated, `null`
+    /// innermost, then as many breaks.
+    IndefiniteObject,
+    /// The `nested-<depth>` workload: its bytes into its types, or its
+    /// value encoded.
+    Workload,
 }
 
 impl Shape {
@@ -55,23 +80,44 @@ impl Shape {
         match self {
             Self::Array => "array",
             Self::Object => "object",
+            Self::IndefiniteArray => "indefinite-array",
+            Self::IndefiniteObject => "indefinite-object",
+            Self::Workload => "workload",
         }
     }
 
     fn parse(name: &str) -> Option<Self> {
-        [Self::Array, Self::Object]
-            .into_iter()
-            .find(|shape| shape.name() == name)
+        [
+            Self::Array,
+            Self::Object,
+            Self::IndefiniteArray,
+            Self::IndefiniteObject,
+            Self::Workload,
+        ]
+        .into_iter()
+        .find(|shape| shape.name() == name)
+    }
+
+    fn arrays(self) -> bool {
+        matches!(self, Self::Array | Self::IndefiniteArray)
     }
 }
 
-/// What the document is decoded into.
+/// What the document is decoded into, or done with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decoded {
     /// `serde_json::Value`, through `deserialize_any`.
     Value,
     /// `serde::de::IgnoredAny`.
     Ignored,
+    /// A recursive derived type: [`Tree`] for arrays, [`Chain`] for maps.
+    Struct,
+    /// The workload's owned form, through `Backend::decode`.
+    Owned,
+    /// The workload's borrowed form, through `Backend::decode_borrowed`.
+    Borrowed,
+    /// The workload's value, through `Backend::encode`.
+    Encode,
 }
 
 impl Decoded {
@@ -81,22 +127,51 @@ impl Decoded {
         match self {
             Self::Value => "value",
             Self::Ignored => "ignored",
+            Self::Struct => "struct",
+            Self::Owned => "owned",
+            Self::Borrowed => "borrowed",
+            Self::Encode => "encode",
         }
     }
 
     fn parse(name: &str) -> Option<Self> {
-        [Self::Value, Self::Ignored]
-            .into_iter()
-            .find(|target| target.name() == name)
+        [
+            Self::Value,
+            Self::Ignored,
+            Self::Struct,
+            Self::Owned,
+            Self::Borrowed,
+            Self::Encode,
+        ]
+        .into_iter()
+        .find(|target| target.name() == name)
     }
 }
 
+/// An array of arrays, as an application's tree type declares it.
+#[derive(Debug, Deserialize)]
+pub struct Tree(pub Vec<Tree>);
+
+/// A map holding the next level, as an application's linked type declares
+/// it: `{"a": {"a": ... null}}`.
+#[derive(Debug, Deserialize)]
+pub struct Chain {
+    /// The next level, absent at the leaf.
+    pub a: Option<Box<Chain>>,
+}
+
 /// A CBOR document nested `depth` deep.
+///
+/// # Panics
+/// For [`Shape::Workload`], whose bytes are the workload's.
 #[must_use]
 pub fn document(shape: Shape, depth: usize) -> Vec<u8> {
     match shape {
         Shape::Array => [vec![0x81; depth - 1], vec![0x80]].concat(),
         Shape::Object => [[0xa1, 0x61, b'a'].repeat(depth), vec![0xf6]].concat(),
+        Shape::IndefiniteArray => [vec![0x9f; depth], vec![0xff; depth]].concat(),
+        Shape::IndefiniteObject => [[0xbf, 0x61, b'a'].repeat(depth), vec![0xf6], vec![0xff; depth]].concat(),
+        Shape::Workload => unreachable!("a workload's bytes are its own"),
     }
 }
 
@@ -144,8 +219,13 @@ impl Job {
 #[must_use]
 pub fn jobs() -> Vec<Job> {
     let mut jobs = Vec::new();
-    for shape in [Shape::Array, Shape::Object] {
-        for target in [Decoded::Value, Decoded::Ignored] {
+    for shape in [
+        Shape::Array,
+        Shape::Object,
+        Shape::IndefiniteArray,
+        Shape::IndefiniteObject,
+    ] {
+        for target in [Decoded::Value, Decoded::Ignored, Decoded::Struct] {
             for stack in STACKS {
                 for depth in DEPTHS {
                     jobs.push(Job {
@@ -155,6 +235,18 @@ pub fn jobs() -> Vec<Job> {
                         depth,
                     });
                 }
+            }
+        }
+    }
+    for target in [Decoded::Owned, Decoded::Borrowed, Decoded::Encode] {
+        for stack in STACKS {
+            for depth in WORKLOAD_DEPTHS {
+                jobs.push(Job {
+                    shape: Shape::Workload,
+                    target,
+                    stack,
+                    depth,
+                });
             }
         }
     }
@@ -307,18 +399,24 @@ pub fn run<B: Backend>(exe: Option<&Path>) -> Section {
     } else {
         probe_all(exe, B::NAME)
     };
+    let mut encode_crashes = Vec::new();
     for ((job, r), b) in jobs().into_iter().zip(reference).zip(&backend) {
         let case = format!("{}/{}", job.series(), job.depth);
         section.case();
         if r != b {
             section.differ(&case, r.describe(), b.describe());
         }
-        match b {
-            Probe::Crashed(detail) => section.fail(&case, format!("crashed: {detail}")),
-            Probe::Rejected(422) => section.fail(&case, "too deep answered 422, not 400"),
+        match (b, job.target) {
+            (Probe::Crashed(detail), Decoded::Encode) => {
+                encode_crashes.push(json!({ "case": case, "detail": detail }));
+            }
+            (Probe::Crashed(detail), _) => section.fail(&case, format!("crashed: {detail}")),
+            (Probe::Rejected(422), Decoded::Encode) => {}
+            (Probe::Rejected(422), _) => section.fail(&case, "too deep answered 422, not 400"),
             _ => {}
         }
     }
+    section.data("encode_crashes", Value::Array(encode_crashes));
     section.data(
         "limits",
         json!({ "backend": limits(&backend), "reference": limits(reference) }),
@@ -326,8 +424,9 @@ pub fn run<B: Backend>(exe: Option<&Path>) -> Section {
     section
 }
 
-/// The `depth-probe` subcommand: `<backend> <array|object> <depth>
-/// <value|ignored> <stack_bytes>`. Returns the exit code.
+/// The `depth-probe` subcommand: `<backend> <shape> <depth> <target>
+/// <stack_bytes>`, each named as [`Shape::name`] and [`Decoded::name`] say.
+/// Returns the exit code.
 #[must_use]
 pub fn child(args: &[String]) -> u8 {
     let [backend, shape, depth, target, stack] = args else {
@@ -366,14 +465,28 @@ impl Visit for Child {
             stack,
             depth,
         } = self.0;
-        let body = bytes::Bytes::from(document(shape, depth));
+        // Built before the thread starts, so only the library's own work runs
+        // on the stack under test.
+        let body = match shape {
+            Shape::Workload => match payloads::dispatch(&format!("nested-{depth}"), WorkloadBytes) {
+                Some(bytes) => bytes::Bytes::from(bytes),
+                None => return 2,
+            },
+            _ => bytes::Bytes::from(document(shape, depth)),
+        };
         let spawned = std::thread::Builder::new()
             .stack_size(stack)
-            .spawn(move || match target {
-                // Never dropped: `Value`'s recursive drop could overflow where the
+            .spawn(move || match (target, shape) {
+                // Never dropped: a recursive drop could overflow where the
                 // parser did not, and that would not be the backend's crash.
-                Decoded::Value => B::decode::<Value>(body).map(std::mem::forget),
-                Decoded::Ignored => B::decode::<IgnoredAny>(body).map(drop),
+                (Decoded::Value, _) => B::decode::<Value>(body).map(std::mem::forget),
+                (Decoded::Ignored, _) => B::decode::<IgnoredAny>(body).map(drop),
+                (Decoded::Struct, shape) if shape.arrays() => B::decode::<Tree>(body).map(std::mem::forget),
+                (Decoded::Struct, _) => B::decode::<Chain>(body).map(std::mem::forget),
+                (Decoded::Owned | Decoded::Borrowed | Decoded::Encode, _) => {
+                    payloads::dispatch(&format!("nested-{depth}"), OnWorkload::<B>(target, body, PhantomData))
+                        .unwrap_or_else(|| Err(codecs::Failure::unsupported()))
+                }
             });
         match spawned.map(std::thread::JoinHandle::join) {
             Ok(Ok(Ok(()))) => 0,
@@ -382,6 +495,40 @@ impl Visit for Child {
                 REJECTED
             }
             _ => 20,
+        }
+    }
+}
+
+/// A workload's CBOR bytes.
+struct WorkloadBytes;
+
+impl payloads::Visit for WorkloadBytes {
+    type Output = Vec<u8>;
+    fn visit<W: Workload>(self) -> Vec<u8> {
+        W::bytes(Format::Cbor)
+    }
+}
+
+/// A workload probe's work, on the thread under test: its bytes decoded
+/// into its owned or borrowed form, or its value encoded. The value is
+/// built here and the encoding dropped after: building and dropping
+/// `Node` is iterative.
+struct OnWorkload<B>(Decoded, bytes::Bytes, PhantomData<B>);
+
+impl<B: Backend> payloads::Visit for OnWorkload<B> {
+    type Output = Result<(), codecs::Failure>;
+    fn visit<W: Workload>(self) -> Result<(), codecs::Failure> {
+        let Self(target, body, _) = self;
+        match target {
+            Decoded::Owned => B::decode::<W::Owned>(body).map(std::mem::forget),
+            Decoded::Borrowed => {
+                let mut body = Body::new(body);
+                B::decode_borrowed::<W::Borrowed<'_>>(&mut body).map(std::mem::forget)
+            }
+            _ => {
+                let value = W::value();
+                B::encode(&value).map(drop)
+            }
         }
     }
 }

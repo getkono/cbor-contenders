@@ -10,7 +10,6 @@
 //! `skip-unknown` is `twitter-like` into a target type declaring a fifth of
 //! its keys.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -117,42 +116,42 @@ pub struct User {
 pub struct UserRef<'a> {
     pub id: u64,
     #[serde(borrow)]
-    pub id_str: Cow<'a, str>,
+    pub id_str: &'a str,
     #[serde(borrow)]
-    pub name: Cow<'a, str>,
+    pub name: &'a str,
     #[serde(borrow)]
-    pub screen_name: Cow<'a, str>,
+    pub screen_name: &'a str,
     #[serde(borrow)]
-    pub location: Cow<'a, str>,
+    pub location: &'a str,
     #[serde(borrow)]
-    pub description: Cow<'a, str>,
+    pub description: &'a str,
     #[serde(borrow)]
-    pub url: Option<Cow<'a, str>>,
+    pub url: Option<&'a str>,
     pub protected: bool,
     pub followers_count: u32,
     pub friends_count: u32,
     pub listed_count: u32,
     #[serde(borrow)]
-    pub created_at: Cow<'a, str>,
+    pub created_at: &'a str,
     pub favourites_count: u32,
     pub utc_offset: Option<i32>,
     #[serde(borrow)]
-    pub time_zone: Option<Cow<'a, str>>,
+    pub time_zone: Option<&'a str>,
     pub geo_enabled: bool,
     pub verified: bool,
     pub statuses_count: u32,
     #[serde(borrow)]
-    pub lang: Cow<'a, str>,
+    pub lang: &'a str,
     #[serde(borrow)]
-    pub profile_background_color: Cow<'a, str>,
+    pub profile_background_color: &'a str,
     #[serde(borrow)]
-    pub profile_image_url: Cow<'a, str>,
+    pub profile_image_url: &'a str,
     pub default_profile: bool,
 }
 
 twin! {
     /// A hashtag entity.
-    Hashtag / HashtagRef { text: String => Cow<'a, str> }
+    Hashtag / HashtagRef { text: String => &'a str }
 }
 
 /// A status.
@@ -180,14 +179,14 @@ pub struct Status {
 #[allow(missing_docs)]
 pub struct StatusRef<'a> {
     #[serde(borrow)]
-    pub created_at: Cow<'a, str>,
+    pub created_at: &'a str,
     pub id: u64,
     #[serde(borrow)]
-    pub id_str: Cow<'a, str>,
+    pub id_str: &'a str,
     #[serde(borrow)]
-    pub text: Cow<'a, str>,
+    pub text: &'a str,
     #[serde(borrow)]
-    pub source: Cow<'a, str>,
+    pub source: &'a str,
     pub truncated: bool,
     pub in_reply_to_status_id: Option<u64>,
     #[serde(borrow)]
@@ -199,7 +198,7 @@ pub struct StatusRef<'a> {
     pub favorited: bool,
     pub retweeted: bool,
     #[serde(borrow)]
-    pub lang: Cow<'a, str>,
+    pub lang: &'a str,
 }
 
 /// The search response.
@@ -298,7 +297,7 @@ pub struct UserBrief {
 #[allow(missing_docs)]
 pub struct UserBriefRef<'a> {
     #[serde(borrow)]
-    pub screen_name: Cow<'a, str>,
+    pub screen_name: &'a str,
     pub followers_count: u32,
     pub verified: bool,
 }
@@ -320,12 +319,12 @@ pub struct StatusBrief {
 pub struct StatusBriefRef<'a> {
     pub id: u64,
     #[serde(borrow)]
-    pub text: Cow<'a, str>,
+    pub text: &'a str,
     #[serde(borrow)]
     pub user: UserBriefRef<'a>,
     pub retweet_count: u32,
     #[serde(borrow)]
-    pub lang: Cow<'a, str>,
+    pub lang: &'a str,
 }
 
 /// [`Twitter`], only the fields a client reads.
@@ -433,16 +432,16 @@ pub struct PerformanceRef<'a> {
     pub event_id: u64,
     pub id: u64,
     #[serde(borrow)]
-    pub logo: Option<Cow<'a, str>>,
+    pub logo: Option<&'a str>,
     #[serde(borrow)]
-    pub name: Option<Cow<'a, str>>,
+    pub name: Option<&'a str>,
     pub prices: Vec<Price>,
     pub seat_categories: Vec<SeatCategory>,
     #[serde(borrow)]
-    pub seat_map_image: Option<Cow<'a, str>>,
+    pub seat_map_image: Option<&'a str>,
     pub start: u64,
     #[serde(borrow)]
-    pub venue_code: Cow<'a, str>,
+    pub venue_code: &'a str,
 }
 
 /// An event.
@@ -466,17 +465,17 @@ pub struct Event {
 #[allow(missing_docs)]
 pub struct EventRef<'a> {
     #[serde(borrow)]
-    pub description: Option<Cow<'a, str>>,
+    pub description: Option<&'a str>,
     pub id: u64,
     #[serde(borrow)]
-    pub logo: Option<Cow<'a, str>>,
+    pub logo: Option<&'a str>,
     #[serde(borrow)]
-    pub name: Cow<'a, str>,
+    pub name: &'a str,
     pub sub_topic_ids: Vec<u64>,
     #[serde(borrow)]
-    pub subject_code: Option<Cow<'a, str>>,
+    pub subject_code: Option<&'a str>,
     #[serde(borrow)]
-    pub subtitle: Option<Cow<'a, str>>,
+    pub subtitle: Option<&'a str>,
     pub topic_ids: Vec<u64>,
 }
 
@@ -499,17 +498,17 @@ pub struct Citm {
 #[allow(missing_docs)]
 pub struct CitmRef<'a> {
     #[serde(borrow)]
-    pub area_names: BTreeMap<Cow<'a, str>, Cow<'a, str>>,
+    pub area_names: BTreeMap<&'a str, &'a str>,
     #[serde(borrow)]
-    pub events: BTreeMap<Cow<'a, str>, EventRef<'a>>,
+    pub events: BTreeMap<&'a str, EventRef<'a>>,
     #[serde(borrow)]
     pub performances: Vec<PerformanceRef<'a>>,
     #[serde(borrow)]
-    pub seat_category_names: BTreeMap<Cow<'a, str>, Cow<'a, str>>,
+    pub seat_category_names: BTreeMap<&'a str, &'a str>,
     #[serde(borrow)]
-    pub topic_sub_topics: BTreeMap<Cow<'a, str>, Vec<u64>>,
+    pub topic_sub_topics: BTreeMap<&'a str, Vec<u64>>,
     #[serde(borrow)]
-    pub venue_names: BTreeMap<Cow<'a, str>, Cow<'a, str>>,
+    pub venue_names: BTreeMap<&'a str, &'a str>,
 }
 
 /// `citm-like`: ~480 KiB, integer- and key-heavy, many `null`s.
@@ -630,7 +629,7 @@ pub struct Canada {
 #[allow(missing_docs)]
 pub struct GeometryRef<'a> {
     #[serde(rename = "type", borrow)]
-    pub kind: Cow<'a, str>,
+    pub kind: &'a str,
     pub coordinates: Vec<Vec<(f64, f64)>>,
 }
 
@@ -639,9 +638,9 @@ pub struct GeometryRef<'a> {
 #[allow(missing_docs)]
 pub struct FeatureRef<'a> {
     #[serde(rename = "type", borrow)]
-    pub kind: Cow<'a, str>,
+    pub kind: &'a str,
     #[serde(borrow)]
-    pub properties: BTreeMap<Cow<'a, str>, Cow<'a, str>>,
+    pub properties: BTreeMap<&'a str, &'a str>,
     #[serde(borrow)]
     pub geometry: GeometryRef<'a>,
 }
@@ -651,7 +650,7 @@ pub struct FeatureRef<'a> {
 #[allow(missing_docs)]
 pub struct CanadaRef<'a> {
     #[serde(rename = "type", borrow)]
-    pub kind: Cow<'a, str>,
+    pub kind: &'a str,
     #[serde(borrow)]
     pub features: Vec<FeatureRef<'a>>,
 }

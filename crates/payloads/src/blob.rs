@@ -5,8 +5,6 @@
 //! [`wire`] asks the serializer whether it is human-readable, which serde_json
 //! is and the CBOR serializers are not.
 
-use std::borrow::Cow;
-
 use serde::{Deserialize, Serialize};
 
 use crate::families::FAMILY_BYTES;
@@ -31,17 +29,24 @@ pub mod wire {
         }
     }
 
-    /// Read bytes as the format writes them, borrowing where the format can.
-    pub fn deserialize<'de: 'a, 'a, D: Deserializer<'de>, T: From<Cow<'a, [u8]>>>(
-        deserializer: D,
-    ) -> Result<T, D::Error> {
+    /// Read bytes as the format writes them, into an owned buffer.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
         if deserializer.is_human_readable() {
-            let text = <Cow<'a, str>>::deserialize(deserializer)?;
-            let bytes = BASE64.decode(text.as_bytes()).map_err(D::Error::custom)?;
-            Ok(T::from(Cow::Owned(bytes)))
+            let text = <Cow<'de, str>>::deserialize(deserializer)?;
+            BASE64.decode(text.as_bytes()).map_err(D::Error::custom)
         } else {
-            let bytes: Cow<'a, [u8]> = serde_bytes::Deserialize::deserialize(deserializer)?;
-            Ok(T::from(bytes))
+            serde_bytes::deserialize(deserializer)
+        }
+    }
+
+    /// Read bytes as a slice of the input. A human-readable format holds
+    /// them as base64 text, which has no slice of the input to hand out, so
+    /// it is refused there: that format cannot borrow bytes.
+    pub fn borrow<'de: 'a, 'a, D: Deserializer<'de>>(deserializer: D) -> Result<&'a [u8], D::Error> {
+        if deserializer.is_human_readable() {
+            Err(D::Error::custom("bytes written as base64 text cannot be borrowed"))
+        } else {
+            <&'a [u8]>::deserialize(deserializer)
         }
     }
 }
@@ -77,11 +82,11 @@ codecs::native_type!(Blobs);
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlobRef<'a> {
     /// What it is.
-    #[serde(borrow)]
-    pub name: Cow<'a, str>,
-    /// The bytes.
-    #[serde(borrow, with = "wire")]
-    pub data: Cow<'a, [u8]>,
+    pub name: &'a str,
+    /// The bytes: a byte string borrowed from a CBOR body. Refused from a
+    /// JSON body, whose base64 text has no bytes to borrow.
+    #[serde(borrow, serialize_with = "wire::serialize", deserialize_with = "wire::borrow")]
+    pub data: &'a [u8],
 }
 
 /// [`Blobs`], borrowing.

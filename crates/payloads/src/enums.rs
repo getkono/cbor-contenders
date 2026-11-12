@@ -8,8 +8,6 @@
 //! buffering, and whether a backend can still borrow through it, is the
 //! variable.
 
-use std::borrow::Cow;
-
 use serde::{Deserialize, Serialize};
 
 use crate::families::fill_to;
@@ -39,9 +37,9 @@ pub enum CommandRef<'a> {
     Move(i32, i32),
     Rename {
         #[serde(borrow)]
-        from: Cow<'a, str>,
+        from: &'a str,
         #[serde(borrow)]
-        to: Cow<'a, str>,
+        to: &'a str,
     },
 }
 
@@ -64,7 +62,7 @@ pub enum EventRef<'a> {
     Created {
         id: u64,
         #[serde(borrow)]
-        name: Cow<'a, str>,
+        name: &'a str,
         public: bool,
     },
     Deleted {
@@ -73,9 +71,9 @@ pub enum EventRef<'a> {
     Moved {
         id: u64,
         #[serde(borrow)]
-        from: Cow<'a, str>,
+        from: &'a str,
         #[serde(borrow)]
-        to: Cow<'a, str>,
+        to: &'a str,
     },
     Heartbeat,
 }
@@ -97,12 +95,12 @@ pub enum Envelope {
 #[serde(tag = "tag", content = "content", rename_all = "snake_case")]
 #[allow(missing_docs)]
 pub enum EnvelopeRef<'a> {
-    Text(#[serde(borrow)] Cow<'a, str>),
+    Text(#[serde(borrow)] &'a str),
     Count(u64),
     Pair(u32, u32),
     Login {
         #[serde(borrow)]
-        user: Cow<'a, str>,
+        user: &'a str,
         admin: bool,
     },
     Ping,
@@ -130,12 +128,12 @@ pub enum Payload {
 pub enum PayloadRef<'a> {
     Nothing,
     Number(i64),
-    Text(#[serde(borrow)] Cow<'a, str>),
+    Text(#[serde(borrow)] &'a str),
     List(Vec<u64>),
     Error {
         code: u32,
         #[serde(borrow)]
-        message: Cow<'a, str>,
+        message: &'a str,
     },
     Point {
         x: i32,

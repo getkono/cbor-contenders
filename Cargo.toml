@@ -56,6 +56,9 @@ hyper = { version = "1", features = ["http1", "client"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 http = "1"
+# Kynos's decimal-big04 feature's type, beside the formatted-string types
+# above, at the version Kynos's lockfile resolves.
+bigdecimal = { version = "=0.4.11", default-features = false, features = ["serde"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

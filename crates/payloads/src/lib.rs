@@ -11,12 +11,18 @@
 //! The JSON bytes are serde_json's compact encoding, the protobuf bytes
 //! prost's, and minicbor-native's minicbor's own derive.
 //!
-//! Each workload has an owned form (`String` fields) and a borrowed form
-//! (`#[serde(borrow)] Cow<'de, str>` wherever the owned form holds a string).
-//! The borrowed form borrows wherever the backend can hand out a slice of the
-//! input and allocates otherwise, so the difference between the two forms *is*
-//! each backend's ability to borrow. Workloads with no strings use one type
-//! for both forms.
+//! Each workload has an owned form (`String` and `Vec<u8>` fields) and a
+//! borrowed form: `&'de str` wherever the owned form holds a string and
+//! `&'de [u8]` wherever it holds bytes, in every position (`Vec<&'de str>`,
+//! `Option<&'de str>`, `BTreeMap<&'de str, _>`). Not `Cow`: serde's derive
+//! borrows into a `Cow` only when it is the field's own type, and copies a
+//! `Cow` inside a `Vec`, `Option` or map, so a `Cow` form would measure a
+//! copy and call it a borrow. A borrowed form decodes only where the backend
+//! hands out a slice of the input for every string and byte string, so a
+//! backend that cannot (a reader-based decoder, an indefinite-length string,
+//! a JSON string with an escape, base64 text) refuses it: the borrowed form
+//! is each backend's ability to borrow, and its refusal is that backend not
+//! borrowing. Workloads with no strings use one type for both forms.
 //!
 //! The native formats (prost, minicbor's derive) need a second derive, so
 //! only the workloads whose shape they can carry have a [`Workload::native`]
@@ -106,6 +112,8 @@ pub enum Group {
     Family,
     /// Schema-equivalents of widely used real-world documents.
     World,
+    /// Bodies a server must refuse ([`Expect::Reject`]).
+    Rejection,
 }
 
 /// A native value for a workload the native formats cannot carry: it has no

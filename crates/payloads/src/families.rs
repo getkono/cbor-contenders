@@ -6,7 +6,6 @@
 //! prices and coordinates, mostly-null records, omitted fields filled by
 //! `#[serde(default)]`, and long or integer map keys.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -190,7 +189,7 @@ impl Workload for Unicode {
     const NAME: &'static str = "unicode";
     const GROUP: Group = Group::Family;
     type Owned = Vec<String>;
-    type Borrowed<'de> = Vec<Cow<'de, str>>;
+    type Borrowed<'de> = Vec<&'de str>;
     type Native = Strings;
 
     fn native() -> Option<Strings> {
@@ -305,7 +304,7 @@ impl Workload for Wide {
     const NAME: &'static str = "wide-1000";
     const GROUP: Group = Group::Family;
     type Owned = BTreeMap<String, u64>;
-    type Borrowed<'de> = BTreeMap<Cow<'de, str>, u64>;
+    type Borrowed<'de> = BTreeMap<&'de str, u64>;
     type Native = Entries;
 
     fn native() -> Option<Entries> {
@@ -436,7 +435,7 @@ pub struct Text {
 pub struct TextRef<'a> {
     /// The string.
     #[serde(borrow)]
-    pub text: Cow<'a, str>,
+    pub text: &'a str,
 }
 
 /// One 256 KiB string of printable ASCII with nothing to escape, so the
@@ -544,15 +543,15 @@ pub struct ProfileRef<'a> {
     pub a: Option<u64>,
     /// An optional string.
     #[serde(borrow)]
-    pub b: Option<Cow<'a, str>>,
+    pub b: Option<&'a str>,
     /// Feature flags.
     pub flags: [bool; 4],
     /// Labels, mostly none.
     #[serde(borrow)]
-    pub tags: Vec<Cow<'a, str>>,
+    pub tags: Vec<&'a str>,
     /// Attributes, mostly none.
     #[serde(borrow)]
-    pub meta: BTreeMap<Cow<'a, str>, Cow<'a, str>>,
+    pub meta: BTreeMap<&'a str, &'a str>,
 }
 
 /// Records dominated by `null`, booleans, `[]` and `{}`: each optional member
@@ -628,15 +627,15 @@ pub struct SettingRef<'a> {
     pub id: u64,
     /// Name, always present.
     #[serde(borrow)]
-    pub name: Cow<'a, str>,
+    pub name: &'a str,
     /// Kind, always present.
     #[serde(borrow)]
-    pub kind: Cow<'a, str>,
+    pub kind: &'a str,
     /// Revision, always present.
     pub version: u32,
     /// Free text, usually omitted.
     #[serde(default, borrow)]
-    pub description: Cow<'a, str>,
+    pub description: &'a str,
     /// Usually omitted.
     #[serde(default)]
     pub enabled: bool,
@@ -645,13 +644,13 @@ pub struct SettingRef<'a> {
     pub retries: u32,
     /// Usually omitted.
     #[serde(default, borrow)]
-    pub labels: Vec<Cow<'a, str>>,
+    pub labels: Vec<&'a str>,
     /// Usually omitted.
     #[serde(default)]
     pub parent: Option<u64>,
     /// Usually omitted.
     #[serde(default, borrow)]
-    pub owner: Option<Cow<'a, str>>,
+    pub owner: Option<&'a str>,
 }
 
 /// [`Setting`] as it arrives: a defaulted member at its default is omitted.
@@ -775,7 +774,7 @@ pub struct Keyed {
 pub struct KeyedRef<'a> {
     /// 64-byte keys.
     #[serde(borrow)]
-    pub long: BTreeMap<Cow<'a, str>, u32>,
+    pub long: BTreeMap<&'a str, u32>,
     /// Integer keys.
     pub by_id: BTreeMap<u64, u32>,
 }

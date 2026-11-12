@@ -1,6 +1,7 @@
 //! Arbitrary bytes into a struct using the attributes a server's types use,
-//! owned and borrowed: no ill-formed body accepted, and the same value as the
-//! oracle wherever both accept.
+//! owned and borrowed: every answer one the body's form allows, and the same
+//! value as the oracle and as each other wherever both accept (the rule is the
+//! crate's).
 //!
 //! The owned decode takes the body as a unique buffer and the borrowed one
 //! as a frame sharing the connection's buffer.
@@ -12,7 +13,7 @@ use std::collections::BTreeMap;
 use codecs::backend::serde_cbor::SerdeCbor;
 use codecs::body::Arrival;
 use codecs::{Backend, Body};
-use fuzz::{Check, refuse_ill_formed};
+use fuzz::{Check, Tally, judge_form};
 use libfuzzer_sys::fuzz_target;
 use serde::{Deserialize, Serialize};
 
@@ -57,25 +58,42 @@ fn bits<T: Serialize>(value: &T) -> Option<serde_cbor::Value> {
     serde_cbor::value::to_value(value).ok()
 }
 
+/// Whether two decoded values are the same, through the oracle's rendering.
+fn same_value<A: Serialize, B: Serialize>(a: &A, b: &B) -> bool {
+    matches!((bits(a), bits(b)), (Some(a), Some(b)) if fuzz::same(&a, &b))
+}
+
 struct DecodeStruct;
 
 impl Check for DecodeStruct {
     fn check<B: Backend>(data: &[u8]) {
         let owned = B::decode::<Request>(bytes::Bytes::copy_from_slice(data));
-        refuse_ill_formed(data, "owned", owned.is_ok());
-        if let (Ok(c), Ok(r)) = (
-            &owned,
-            SerdeCbor::decode::<Request>(bytes::Bytes::copy_from_slice(data)),
-        ) {
-            assert!(
-                matches!((bits(c), bits(&r)), (Some(c), Some(r)) if fuzz::same(&c, &r)),
-                "owned value differs: {c:?} vs {r:?}"
-            );
+        let oracle = SerdeCbor::decode::<Request>(bytes::Bytes::copy_from_slice(data));
+        judge_form::<B, _>(data, "owned", &owned, Some(&oracle));
+        if let (Ok(c), Ok(r)) = (&owned, &oracle) {
+            assert!(same_value(c, r), "owned value differs: {c:?} vs {r:?}");
         }
         let (shared, _connection) = Arrival::Shared.materialize(data);
         let mut body = Body::new(shared);
         let borrowed = B::decode_borrowed::<RequestRef<'_>>(&mut body);
-        refuse_ill_formed(data, "borrowed", borrowed.is_ok());
+        match (&borrowed, &owned) {
+            // A refusal of the borrowed form where the owned one decodes is
+            // the candidate not borrowing: loud, and the owned decode is
+            // judged above.
+            (Err(_), Ok(_)) => fuzz::tally(Tally::NotBorrowed),
+            _ => judge_form::<B, _>(data, "borrowed", &borrowed, None),
+        }
+        if let Ok(b) = &borrowed {
+            if let Ok(c) = &owned {
+                assert!(same_value(b, c), "borrowed value differs from owned: {b:?} vs {c:?}");
+            }
+            if let Ok(r) = &oracle {
+                assert!(
+                    same_value(b, r),
+                    "borrowed value differs from the oracle's: {b:?} vs {r:?}"
+                );
+            }
+        }
     }
 }
 

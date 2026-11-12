@@ -1,8 +1,9 @@
 //! Section `encode_diff`: every workload, encoded and decoded, against the
 //! serde_cbor oracle and the workload's own value.
 //!
-//! Encode side: `encode` and `encode_into` (into a buffer holding stale
-//! bytes, which must be cleared) must produce the oracle's bytes (preferred
+//! Encode side: `encode`, `encode_into` (into a buffer holding stale
+//! bytes, which must be cleared) and `to_writer` into Kynos's `BodyWriter`
+//! (the path a server's response takes) must produce the oracle's bytes (preferred
 //! serialization), or bytes the oracle reads into the workload's type as the
 //! same value (a float written wider than it needs is the same float): a
 //! non-gating difference, listed with the first differing offset. Anything
@@ -11,7 +12,9 @@
 //! Decode side: the oracle's bytes decoded owned and borrowed, through both
 //! arrivals, must be the workload's value exactly (for `reject-*`, refused
 //! with its status), except where the library refuses on its own depth limit
-//! (that policy is `depth`'s to report).
+//! (that policy is `depth`'s to report). The borrowed form is judged by
+//! [`crate::outcome::on_borrowed`]: refused where the owned form of the same
+//! bytes decodes, it is not borrowed, recorded and not gated.
 
 use std::marker::PhantomData;
 
@@ -19,7 +22,10 @@ use codecs::{Backend, Format};
 use payloads::Workload;
 use serde_json::{Value, json};
 
-use crate::outcome::{ARRIVALS, BorrowedForm, Outcome, Typed, borrowed, guarded, owned, same_value, to_value};
+use crate::outcome::{
+    ARRIVALS, BorrowedForm, OnBorrowed, Outcome, Typed, borrowed, borrows, guarded, on_borrowed, owned, same_value,
+    to_value,
+};
 use crate::record::Section;
 
 /// Bytes either side of the first difference shown in the report.
@@ -117,25 +123,47 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
                 B::encode_into(&value, &mut out).map(|()| out)
             });
             compare_encoding::<B, W>(section, &format!("{}#encode_into", W::NAME), &reference, into);
+            // What Kynos does with a `BodyCodec`'s encode: `to_writer` into its
+            // response buffer, then `finish`.
+            let written = guarded(|| {
+                let mut writer = codecs::writer::BodyWriter::new();
+                B::to_writer(&value, &mut writer).map(|()| writer.finish().to_vec())
+            });
+            compare_encoding::<B, W>(section, &format!("{}#to_writer", W::NAME), &reference, written);
         }
         let bytes = W::bytes(Format::Cbor);
         let expected = match W::EXPECT {
             payloads::Expect::Value => Some(to_value(&value)),
             payloads::Expect::Reject(_) => None,
         };
+        // For a `reject-*` workload, whether the library borrows the body it
+        // was damaged from: a library that does not refuses the damaged one
+        // borrowed before it reaches the damage, which says nothing about it.
+        let undamaged = match W::EXPECT {
+            payloads::Expect::Value => None,
+            payloads::Expect::Reject(_) => Some(borrows::<B, BorrowedForm<W>>(&payloads::cbor(&value))),
+        };
         for arrival in ARRIVALS {
+            let owned = owned::<B, Typed<W::Owned>>(&bytes, arrival);
+            // Otherwise the library borrows the workload unless it decodes
+            // the bytes owned and refuses them borrowed.
+            let borrows = undamaged.unwrap_or(!owned.is_accept());
             let paths = [
-                ("owned", owned::<B, Typed<W::Owned>>(&bytes, arrival)),
+                ("owned", owned),
                 ("borrowed", borrowed::<B, BorrowedForm<W>>(&bytes, arrival)),
             ];
             for (path, outcome) in paths {
                 let case = format!("{}#decode/{path}#{}", W::NAME, arrival.name());
-                section.case();
                 let right = match (&expected, &outcome, W::EXPECT) {
                     (Some(value), Outcome::Accept(got), _) => same_value(value, got),
                     (None, Outcome::Reject(failure), payloads::Expect::Reject(status)) => failure.status() == status,
                     _ => false,
                 };
+                if path == "borrowed" && on_borrowed(&outcome, borrows, right) == OnBorrowed::NotBorrowed {
+                    section.not_borrowed(&case, outcome.describe());
+                    continue;
+                }
+                section.case();
                 if right {
                     continue;
                 }
@@ -145,9 +173,6 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
                 section.differ(&case, want, outcome.describe());
                 match &outcome {
                     Outcome::Panic(message) => section.fail(&case, format!("panicked: {message}")),
-                    Outcome::Reject(failure) if failure.class == codecs::Class::Unsupported => {
-                        section.note(format!("{case}: the library has no such entry point"));
-                    }
                     Outcome::Reject(_) if W::NAME.starts_with("nested-") && W::NAME != "nested-100" => {
                         section.note(format!("{case}: refused past the library's depth limit (see depth)"));
                     }
@@ -162,11 +187,17 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
 /// Run the section.
 #[must_use]
 pub fn run<B: Backend>() -> Section {
+    run_on::<B>(payloads::ALL)
+}
+
+/// The section over `names` only: a slice small enough for Miri.
+#[must_use]
+pub fn run_on<B: Backend>(names: &[&str]) -> Section {
     let mut section = Section::new("encode_diff");
     if !B::ENCODES {
         section.note("decode-only backend: encode checks skipped, decode checks run");
     }
-    for name in payloads::ALL {
+    for name in names {
         payloads::dispatch(
             name,
             Visit::<B> {
@@ -175,6 +206,17 @@ pub fn run<B: Backend>() -> Section {
             },
         );
     }
+    // The values are checked on the suite's own stack, which is far larger
+    // than a server's: whether the same workloads fit a server's is
+    // `depth`'s, which decodes and encodes every `nested-*` on 2 MiB and
+    // 8 MiB stacks in a subprocess and gates a crash.
+    section.data(
+        "stack",
+        json!({
+            "bytes": crate::SUITE_STACK,
+            "server_stacks": "depth: workload/{owned,borrowed,encode}/{2,8}MiB",
+        }),
+    );
     section
 }
 

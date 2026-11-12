@@ -21,7 +21,7 @@ pub struct RejectTruncated;
 
 impl Workload for RejectTruncated {
     const NAME: &'static str = "reject-truncated";
-    const GROUP: Group = Group::Family;
+    const GROUP: Group = Group::Rejection;
     const EXPECT: Expect = Expect::Reject(400);
     type Owned = Catalog;
     type Borrowed<'de> = CatalogRef<'de>;
@@ -73,7 +73,7 @@ pub struct RejectShape;
 
 impl Workload for RejectShape {
     const NAME: &'static str = "reject-shape";
-    const GROUP: Group = Group::Family;
+    const GROUP: Group = Group::Rejection;
     const EXPECT: Expect = Expect::Reject(422);
     type Owned = Catalog;
     type Borrowed<'de> = CatalogRef<'de>;

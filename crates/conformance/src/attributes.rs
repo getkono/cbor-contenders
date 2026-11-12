@@ -20,11 +20,14 @@ use std::collections::BTreeMap;
 
 use codecs::Backend;
 use codecs::backend::serde_json::SerdeJson;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
 
-use crate::outcome::{ARRIVALS, Decode, Target, Typed, agree, borrowed, owned, to_value};
+use crate::outcome::{
+    ARRIVALS, Decode, OnBorrowed, Target, Typed, agree, borrowed, guarded, on_borrowed, owned, same_value, to_value,
+};
 use crate::record::Section;
 
 /// `flatten` into a map.
@@ -205,10 +208,110 @@ impl Target for BorrowingTarget {
     }
 }
 
-/// A type's name, its owned and borrowed decode paths, and its inputs.
+/// `&str` fields, borrowed in every position: only a library that hands out
+/// a slice of the input decodes one.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BorrowingStr<'a> {
+    /// A name.
+    pub name: &'a str,
+    /// Tags.
+    #[serde(borrow)]
+    pub tags: Vec<&'a str>,
+}
+
+/// [`BorrowingStr`], owned.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OwningStr {
+    /// A name.
+    pub name: String,
+    /// Tags.
+    pub tags: Vec<String>,
+}
+
+/// [`BorrowingStr`] as a decode target.
+#[derive(Debug)]
+pub struct BorrowingStrTarget;
+
+impl Target for BorrowingStrTarget {
+    type Out<'de> = BorrowingStr<'de>;
+    fn view(out: &BorrowingStr<'_>) -> Value {
+        to_value(out)
+    }
+}
+
+/// The encode side of a case: the value serde_json reads from its JSON,
+/// encoded by the library and read back by the library and the oracle.
+type Encode = fn(&str) -> Option<Encoded>;
+
+/// What the encode side found.
+#[derive(Debug)]
+pub struct Encoded {
+    /// The report's record.
+    pub record: Value,
+    /// Why it gates, if it does.
+    pub failure: Option<String>,
+}
+
+/// Encode the value `input` holds as a `T` (none, where serde_json refuses
+/// it: there is no value to encode), and check it reads back as itself.
+fn encode_side<B: Backend, T: Serialize + DeserializeOwned>(input: &str) -> Option<Encoded> {
+    let value: T = serde_json::from_str(input).ok()?;
+    let original = to_value(&value);
+    let bytes = match guarded(|| B::encode(&value)) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(failure)) => {
+            return Some(Encoded {
+                record: json!({ "encode": { "refused": failure.to_string() } }),
+                failure: Some(format!("encode failed: {failure}")),
+            });
+        }
+        Err(panic) => {
+            return Some(Encoded {
+                record: json!({ "encode": { "panic": panic } }),
+                failure: Some(format!("encode panicked: {panic}")),
+            });
+        }
+    };
+    let own = guarded(|| B::decode::<T>(bytes::Bytes::copy_from_slice(&bytes)))
+        .map_err(|panic| format!("panicked: {panic}"))
+        .and_then(|result| result.map_err(|failure| failure.to_string()))
+        .map(|back| to_value(&back));
+    let oracle = serde_cbor::from_slice::<T>(&bytes)
+        .map_err(|error| error.to_string())
+        .map(|back| to_value(&back));
+    let well_formed = faithful::well_formed(&bytes);
+    let failure = match (&well_formed, &own, &oracle) {
+        (Err(refusal), _, _) => Some(format!("the encoding is not one well-formed item: {refusal}")),
+        (_, Err(why), _) => Some(format!("the library does not read its own encoding back: {why}")),
+        (_, _, Err(why)) => Some(format!("the oracle does not read the encoding: {why}")),
+        (_, Ok(own), _) if !same_value(own, &original) => {
+            Some("the library reads its own encoding back as another value".to_owned())
+        }
+        (_, _, Ok(oracle)) if !same_value(oracle, &original) => {
+            Some("the oracle reads the encoding as another value".to_owned())
+        }
+        _ => None,
+    };
+    Some(Encoded {
+        record: json!({
+            "hex": crate::outcome::abbreviate(&json!(hex::encode(&bytes))),
+            "preferred": faithful::preferred(&bytes),
+            // `flatten` serializes through `serialize_map(None)`: an encoder
+            // that writes what it is told writes an indefinite map, `bf`.
+            "indefinite_root": bytes.first().is_some_and(|b| matches!(b, 0x5f | 0x7f | 0x9f | 0xbf)),
+            "own": own.map_or_else(|why| json!({ "refused": why }), |_| json!("read back")),
+            "oracle": oracle.map_or_else(|why| json!({ "refused": why }), |_| json!("read back")),
+        }),
+        failure,
+    })
+}
+
+/// A type's name, its owned and borrowed decode paths, its encode side, and
+/// its inputs.
 type Case = (
     &'static str,
     [(&'static str, Decode, Decode); 2],
+    Encode,
     &'static [&'static str],
 );
 
@@ -231,6 +334,7 @@ fn cases<B: Backend>() -> Vec<Case> {
                         borrowed::<SerdeJson, Typed<$ty>>,
                     ),
                 ],
+                encode_side::<B, $ty> as Encode,
                 $inputs,
             )
         };
@@ -369,9 +473,34 @@ fn cases<B: Backend>() -> Vec<Case> {
                     borrowed::<SerdeJson, BorrowingTarget>,
                 ),
             ],
+            encode_side::<B, Owning>,
             &[
                 r#"{"name":"plain","tags":["a","b"]}"#,
                 r#"{"name":"esc\"aped","tags":["\u00e9","\n"]}"#,
+                r#"{"name":1,"tags":[]}"#,
+                r#"{"name":"x"}"#,
+            ],
+        ),
+        // No escapes: serde_json borrows every one of these strings, so its
+        // answer is the reference on both paths.
+        (
+            "borrow-str",
+            [
+                (
+                    "owned",
+                    owned::<B, Typed<OwningStr>> as Decode,
+                    owned::<SerdeJson, Typed<OwningStr>> as Decode,
+                ),
+                (
+                    "borrowed",
+                    borrowed::<B, BorrowingStrTarget>,
+                    borrowed::<SerdeJson, BorrowingStrTarget>,
+                ),
+            ],
+            encode_side::<B, OwningStr>,
+            &[
+                r#"{"name":"plain","tags":["a","b"]}"#,
+                "{\"name\":\"\u{e9}t\u{e9}\",\"tags\":[]}",
                 r#"{"name":1,"tags":[]}"#,
                 r#"{"name":"x"}"#,
             ],
@@ -386,29 +515,66 @@ fn cbor_of(input: &str) -> Vec<u8> {
 }
 
 /// Run the section.
+///
+/// Decode: the owned path gates every disagreement with serde_json. The
+/// borrowed path is judged by [`on_borrowed`]: a library that decodes an
+/// input owned but refuses it borrowed does not borrow that target, which is
+/// recorded as not borrowed; every other disagreement gates.
+///
+/// Encode: each value serde_json reads from a case's JSON is encoded by the
+/// library, which must write one well-formed item that it and the oracle
+/// both read back as the same value. Whether the bytes are preferred
+/// serialization, and whether the root is indefinite-length (`flatten`
+/// serializes through `serialize_map(None)`), is recorded.
 #[must_use]
 pub fn run<B: Backend>() -> Section {
     let mut section = Section::new("attributes");
-    for (type_name, paths, inputs) in cases::<B>() {
+    let mut encoded = serde_json::Map::new();
+    for (type_name, paths, encode, inputs) in cases::<B>() {
+        let [(_, owned_b, owned_r), (_, borrowed_b, borrowed_r)] = paths;
         for (index, input) in inputs.iter().enumerate() {
-            for (path, backend, reference) in paths {
-                for arrival in ARRIVALS {
-                    let name = format!("{type_name}/{index}#{path}#{}", arrival.name());
-                    let r = reference(input.as_bytes(), arrival);
-                    let b = backend(&cbor_of(input), arrival);
-                    section.case();
-                    // A library with no borrowing entry point has no answer
-                    // on the borrowed path.
-                    if matches!(&b, crate::outcome::Outcome::Reject(f) if f.class == codecs::Class::Unsupported) {
-                        continue;
-                    }
-                    if !agree(&r, &b) {
+            let cbor = cbor_of(input);
+            for arrival in ARRIVALS {
+                let owned = owned_b(&cbor, arrival);
+                let name = format!("{type_name}/{index}#owned#{}", arrival.name());
+                let r = owned_r(input.as_bytes(), arrival);
+                section.case();
+                if !agree(&r, &owned) {
+                    section.differ(
+                        &name,
+                        json!({ "input": input, "outcome": r.describe() }),
+                        owned.describe(),
+                    );
+                    section.fail(&name, "outcome differs from serde_json on the same value as JSON");
+                }
+                let name = format!("{type_name}/{index}#borrowed#{}", arrival.name());
+                let r = borrowed_r(input.as_bytes(), arrival);
+                let b = borrowed_b(&cbor, arrival);
+                match on_borrowed(&b, !owned.is_accept(), agree(&r, &b)) {
+                    OnBorrowed::Right => section.case(),
+                    OnBorrowed::NotBorrowed => section.not_borrowed(&name, b.describe()),
+                    OnBorrowed::Wrong => {
+                        section.case();
                         section.differ(&name, json!({ "input": input, "outcome": r.describe() }), b.describe());
                         section.fail(&name, "outcome differs from serde_json on the same value as JSON");
                     }
                 }
             }
+            if !B::ENCODES {
+                continue;
+            }
+            if let Some(side) = encode(input) {
+                let name = format!("{type_name}/{index}#encode");
+                section.case();
+                if let Some(failure) = side.failure {
+                    section.differ(&name, json!({ "input": input }), side.record.clone());
+                    section.fail(&name, failure);
+                }
+                encoded.insert(name, side.record);
+            }
         }
     }
+    let preferred = encoded.values().all(|record| record["preferred"] == json!(true));
+    section.data("encode", json!({ "all_preferred": preferred, "by_case": encoded }));
     section
 }

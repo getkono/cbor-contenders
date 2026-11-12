@@ -22,6 +22,12 @@ const GATING: &[(&str, &str, &str, Option<&str>)] = &[
     ("i64::MAX", "1b 7fffffffffffffff", "i64", Some("9223372036854775807")),
     ("-1 into i64", "20", "i64", Some("-1")),
     ("255 into u8", "18 ff", "u8", Some("255")),
+    (
+        "u64::MAX into u128",
+        "1b ffffffffffffffff",
+        "u128",
+        Some("18446744073709551615"),
+    ),
     ("a non-preferred head", "1b 0000000000000001", "u64", Some("1")),
     ("u64::MAX into i64", "1b ffffffffffffffff", "i64", None),
     ("i64::MIN - 1 into i64", "3b 8000000000000000", "i64", None),
@@ -39,7 +45,6 @@ const RECORDED: &[(&str, &str, &str)] = &[
     ("2^64 (tag 2) into u64", "c2 49 010000000000000000", "u64"),
     ("-2^64 - 1 (tag 3) into i128", "c3 49 010000000000000000", "i128"),
     ("1 as a tag-2 bignum into u64", "c2 41 01", "u64"),
-    ("u64::MAX into u128", "1b ffffffffffffffff", "u128"),
     (
         "2^128 (tag 2) into u128",
         "c2 51 0100000000000000000000000000000000",
@@ -90,4 +95,17 @@ pub fn run<B: Backend>() -> Section {
     }
     section.data("beyond_64_bits", Value::Object(observed));
     section
+}
+
+#[cfg(test)]
+mod tests {
+    use codecs::backend::serde_cbor::SerdeCbor;
+
+    use super::*;
+
+    #[test]
+    fn the_oracle_passes_integers() {
+        let section = run::<SerdeCbor>();
+        assert_eq!(section.failure_count(), 0, "{:#?}", section.failures());
+    }
 }
