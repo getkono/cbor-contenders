@@ -16,8 +16,9 @@ pub enum Verdict {
     Inexact { floats: u64, max_ulps: u64 },
     /// A different value.
     Wrong(String),
-    /// The backend refused the input.
-    Rejected(String),
+    /// The backend refused the input: why, as a class a reader of the row
+    /// can act on ([`Verdict::refused`]), and the backend's message.
+    Rejected { refused: &'static str, detail: String },
 }
 
 impl Verdict {
@@ -26,7 +27,24 @@ impl Verdict {
             Self::Exact => "exact",
             Self::Inexact { .. } => "inexact",
             Self::Wrong(_) => "wrong",
-            Self::Rejected(_) => "rejected",
+            Self::Rejected { .. } => "rejected",
+        }
+    }
+
+    /// A refusal by `failure`. `refused` is the row's `refused` field: the
+    /// status a server answers it with (`"400"`, `"422"`), or `"unsupported"`
+    /// for an operation the backend lacks, or `"io"` for a writer failing.
+    #[must_use]
+    pub fn refused(failure: &Failure) -> Self {
+        let refused = match failure.class {
+            Class::Unsupported => "unsupported",
+            Class::Io => "io",
+            Class::Data => "422",
+            Class::Syntax | Class::Eof => "400",
+        };
+        Self::Rejected {
+            refused,
+            detail: failure.to_string(),
         }
     }
 
@@ -104,15 +122,18 @@ pub fn judge_native<W: Workload>(result: Result<W::Native, Failure>) -> Verdict 
     judge(W::EXPECT, result, |value| match W::native() {
         Some(expected) if value == expected => Verdict::Exact,
         Some(_) => Verdict::Wrong("a different value".into()),
-        None => Verdict::Rejected("not carried by the native formats".into()),
+        None => Verdict::Rejected {
+            refused: "not-carried",
+            detail: "not carried by the native formats".into(),
+        },
     })
 }
 
 fn judge<T>(expect: Expect, result: Result<T, Failure>, value: impl FnOnce(T) -> Verdict) -> Verdict {
     match (expect, result) {
-        (_, Err(failure)) if failure.class == Class::Unsupported => Verdict::Rejected(failure.to_string()),
+        (_, Err(failure)) if failure.class == Class::Unsupported => Verdict::refused(&failure),
         (Expect::Value, Ok(decoded)) => value(decoded),
-        (Expect::Value, Err(failure)) => Verdict::Rejected(failure.to_string()),
+        (Expect::Value, Err(failure)) => Verdict::refused(&failure),
         (Expect::Reject(status), Ok(_)) => Verdict::Wrong(format!("accepted; expected a refusal with status {status}")),
         (Expect::Reject(status), Err(failure)) if failure.status() == status => Verdict::Exact,
         (Expect::Reject(status), Err(failure)) => {
@@ -271,7 +292,10 @@ mod tests {
         ));
         assert!(matches!(
             judge_decode::<JsonLarge, Catalog>(Format::Cbor, Err(Failure::unsupported())),
-            Verdict::Rejected(_)
+            Verdict::Rejected {
+                refused: "unsupported",
+                ..
+            }
         ));
     }
 

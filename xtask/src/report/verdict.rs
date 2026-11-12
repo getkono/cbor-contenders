@@ -413,29 +413,28 @@ pub const JSON_DEPTH: u32 = 128;
 
 /// What a cell's `rejected` verdict means for clause 3. A `rejected` cell
 /// is a valid workload the library refused (the bodies that must be refused
-/// are judged `exact` or `wrong` instead):
+/// are judged `exact` or `wrong` instead), and its `refused` field says how
+/// (`cell::verify::Verdict::refused`):
 ///
-/// - an operation the library does not have (`Unsupported`: ciborium has no
-///   borrowing decode), or a workload a native format does not carry, is
-///   recorded, not a wrong answer;
-/// - a refusal with a syntax status (400) of a `nested-N` workload at least
-///   [`JSON_DEPTH`] deep is the library's depth limit, which RFC 8949 leaves
-///   to the implementation and `Json<T>` itself refuses: recorded;
-/// - any other refusal is a wrong answer to a client, as a server answers
-///   it: a body the oracle decodes and the library will not, or a value it
-///   will not encode.
+/// - an operation the library does not have (`unsupported`: ciborium has no
+///   borrowing decode), or a workload a native format does not carry
+///   (`not-carried`), is recorded, not a wrong answer;
+/// - a 400 of a `nested-N` workload at least [`JSON_DEPTH`] deep is the
+///   library's depth limit, which RFC 8949 leaves to the implementation and
+///   `Json<T>` itself refuses: recorded;
+/// - any other refusal, a row without a `refused` class included, is a wrong
+///   answer to a client, as a server answers it: a body the oracle decodes
+///   and the library will not, or a value it will not encode.
 #[must_use]
-pub fn refusal_is_wrong(workload: &str, detail: &str) -> bool {
-    if detail.starts_with("Unsupported") || detail == "not carried by the native formats" {
+pub fn refusal_is_wrong(workload: &str, refused: &str) -> bool {
+    if matches!(refused, "unsupported" | "not-carried") {
         return false;
     }
     let deep = workload
         .strip_prefix("nested-")
         .and_then(|d| d.parse::<u32>().ok())
         .is_some_and(|d| d >= JSON_DEPTH);
-    // `Failure`'s display leads with its class; only `Data` answers 422.
-    let syntax = !detail.starts_with("Data");
-    !(deep && syntax)
+    !(deep && refused == "400")
 }
 
 /// The per-operation tables clause 3 reads, by name.
@@ -486,7 +485,7 @@ fn conformance(data: &Data, entry: &str, set: &str) -> Clause {
         for (key, row) in rows {
             match row["verdict"].as_str() {
                 Some("wrong") => wrong += 1,
-                Some("rejected") if refusal_is_wrong(&key.workload, row["detail"].as_str().unwrap_or("")) => {
+                Some("rejected") if refusal_is_wrong(&key.workload, row["refused"].as_str().unwrap_or("")) => {
                     refused.insert(format!("{} {}", key.workload, key.op));
                 }
                 _ => {}
@@ -881,21 +880,24 @@ mod tests {
     /// does not have.
     #[test]
     fn a_refused_valid_workload_fails_unless_it_is_a_depth_limit() {
-        let refusing = |workload: &str, detail: &str| {
+        let refusing = |workload: &str, refused: &str| {
             let mut data = clean_ciborium();
             data.callgrind.rows.insert(
                 Key::new(DECIDING_VARIANT, "ciborium", workload, "decode"),
-                json!({ "verdict": "rejected", "detail": detail }),
+                json!({ "verdict": "rejected", "refused": refused, "detail": "the library's message" }),
             );
             conformance(&data, "ciborium", "ciborium").word()
         };
-        assert_eq!(refusing("nested-257", "Syntax: recursion limit exceeded"), "pass");
-        assert_eq!(refusing("nested-10000", "Syntax: recursion limit exceeded"), "pass");
-        assert_eq!(refusing("nested-255", "Syntax: recursion limit exceeded"), "pass");
-        assert_eq!(refusing("nested-100", "Syntax: recursion limit exceeded"), "fail");
-        assert_eq!(refusing("nested-10000", "Data: invalid type"), "fail");
-        assert_eq!(refusing("floats", "Syntax: invalid"), "fail");
-        assert_eq!(refusing("json-large", "Unsupported: does not borrow"), "pass");
+        assert_eq!(refusing("nested-257", "400"), "pass");
+        assert_eq!(refusing("nested-10000", "400"), "pass");
+        assert_eq!(refusing("nested-255", "400"), "pass");
+        assert_eq!(refusing("nested-100", "400"), "fail");
+        assert_eq!(refusing("nested-10000", "422"), "fail");
+        assert_eq!(refusing("floats", "400"), "fail");
+        assert_eq!(refusing("json-large", "unsupported"), "pass");
+        assert_eq!(refusing("enums", "not-carried"), "pass");
+        // A row from before the class was recorded is not given the benefit.
+        assert_eq!(refusing("nested-257", ""), "fail");
     }
 
     /// Recorded as no divergence (as runs before the fix were), the report

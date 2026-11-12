@@ -12,8 +12,10 @@ pub fn run(spec: &Spec, job: &mut impl Job) -> Value {
     let verdict = job.verify();
     let mut out = json!({ "verdict": verdict.name(), "size": job.size() });
     match &verdict {
-        crate::verify::Verdict::Wrong(why) | crate::verify::Verdict::Rejected(why) => {
-            out["detail"] = json!(why);
+        crate::verify::Verdict::Wrong(why) => out["detail"] = json!(why),
+        crate::verify::Verdict::Rejected { refused, detail } => {
+            out["refused"] = json!(refused);
+            out["detail"] = json!(detail);
         }
         crate::verify::Verdict::Inexact { floats, max_ulps } => {
             out["inexact_floats"] = json!(floats);

@@ -381,7 +381,7 @@ fn rounds(
             row["core"] = json!(core);
             row["siblings"] = json!(sibling.join(","));
             if let Some(first) = results.first() {
-                for k in ["verdict", "detail", "size", "iters"] {
+                for k in ["verdict", "refused", "detail", "size", "iters"] {
                     if !first[k].is_null() {
                         row[k] = first[k].clone();
                     }

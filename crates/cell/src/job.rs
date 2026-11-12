@@ -456,7 +456,7 @@ impl<B: Backend, W: Workload> Job for Encode<B, W> {
         };
         match encoded {
             Ok(bytes) => judge_encoding::<W>(B::FORMAT, &bytes, &self.reference),
-            Err(failure) => Verdict::Rejected(failure.to_string()),
+            Err(failure) => Verdict::refused(&failure),
         }
     }
 
@@ -559,7 +559,7 @@ impl<N: Native, W: Workload> Job for NativeEncode<N, W> {
         };
         match encoded {
             Ok(bytes) => judge_encoding::<W>(N::FORMAT, &bytes, &self.reference),
-            Err(failure) => Verdict::Rejected(failure.to_string()),
+            Err(failure) => Verdict::refused(&failure),
         }
     }
 
