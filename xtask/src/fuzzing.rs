@@ -102,6 +102,11 @@ pub fn fuzz(args: &[String]) -> Result<()> {
             let _ = std::fs::create_dir_all(&artifacts);
             let artifact_prefix = format!("-artifact_prefix={}/", artifacts.display());
             let target_dir = root().join("target/fuzz").join(set.name).join(config);
+            // Each process of this run writes its tallies here; emptied
+            // first, so the sum is this run's alone.
+            let tally_dir = target_dir.join("tallies").join(backend).join(target);
+            let _ = std::fs::remove_dir_all(&tally_dir);
+            let _ = std::fs::create_dir_all(&tally_dir);
             let cargo_fuzz = |sub: &str| {
                 let mut cmd = crate::build::cargo();
                 cmd.current_dir(&fuzz)
@@ -109,7 +114,8 @@ pub fn fuzz(args: &[String]) -> Result<()> {
                     .args(["fuzz", sub, "--target", &host, "--features", set.features, target])
                     .env("RUSTFLAGS", flags)
                     .env("CARGO_TARGET_DIR", &target_dir)
-                    .env("FUZZ_BACKEND", backend);
+                    .env("FUZZ_BACKEND", backend)
+                    .env("FUZZ_TALLY_DIR", &tally_dir);
                 cmd
             };
             eprintln!("fuzz: {} {backend} {config} {target} for {seconds}s", set.name);
@@ -123,6 +129,8 @@ pub fn fuzz(args: &[String]) -> Result<()> {
                 &artifact_prefix,
             ]))
             .unwrap_or((false, String::new(), "spawn failed".into()));
+            // Read before the replay below adds its own counts.
+            let tallies = read_tallies(&tally_dir);
             // Every input this run found crashing, smallest first.
             let crashes = crashes_since(&artifacts, started);
             // Replay the smallest alone: forked workers' logs are not
@@ -152,7 +160,7 @@ pub fn fuzz(args: &[String]) -> Result<()> {
             json!({
                 "set": set.name, "backend": backend, "config": config, "target": target, "seconds": seconds, "forks": forks, "seed": 1,
                 "finished": finished, "divergence_found": found.divergence, "executions": executed, "crash_count": found.crash_count,
-                "assertion": found.assertion,
+                "assertion": found.assertion, "tallies": tallies,
                 "crash_input_hex": crashes.first().and_then(|(path, _)| std::fs::read(path).ok()).map(|b| hex(&b)),
                 "sanitizer_report": found.sanitizer_report, "crash_tail": tail,
                 "corpus_files": corpus_files.len(), "corpus_bytes": corpus_files.iter().sum::<u64>(),
@@ -167,6 +175,25 @@ pub fn fuzz(args: &[String]) -> Result<()> {
         &["set", "backend", "config", "target"],
         json!({ "toolchain": NIGHTLY }),
     )
+}
+
+/// The sum over every process's tally file in `dir` (each a `<name>
+/// <count>` line per tally, written by the fuzz crate's `tally`). Each file
+/// is its process's last power-of-two snapshot, so a sum is a lower bound,
+/// within a factor of two of the true count.
+fn read_tallies(dir: &Path) -> serde_json::Map<String, serde_json::Value> {
+    let mut sums: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for text in std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+    {
+        for (name, count) in text.lines().filter_map(|l| l.split_once(' ')) {
+            *sums.entry(name.to_owned()).or_default() += count.parse::<u64>().unwrap_or(0);
+        }
+    }
+    sums.into_iter().map(|(name, n)| (name, json!(n))).collect()
 }
 
 /// The `crash-*` inputs in `dir` written at or after `since`, smallest first
@@ -389,6 +416,20 @@ fn miri_sections(stdout: &str, outcome: &str) -> serde_json::Map<String, serde_j
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tallies_are_summed_across_processes() {
+        let dir = std::env::temp_dir().join(format!("xtask-tallies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("1"), "ill-formed-422 4\nother-class 0\n").unwrap();
+        std::fs::write(dir.join("2"), "ill-formed-422 8\nnot-borrowed 1\n").unwrap();
+        let sums = super::read_tallies(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(sums["ill-formed-422"], 12);
+        assert_eq!(sums["other-class"], 0);
+        assert_eq!(sums["not-borrowed"], 1);
+    }
+
     use super::{FUZZ_TARGETS, Findings, crashes_since, finished_run, hex, miri_sections, runs};
     use crate::matrix::set;
 

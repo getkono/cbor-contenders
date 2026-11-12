@@ -14,23 +14,30 @@
 //! which shares no code with any candidate, and by the oracle's value:
 //!
 //! 1. An ill-formed body (RFC 8949 section 5.1, invalid UTF-8 included) must
-//!    be refused, and refused as the client's syntax (400). Accepting it, or
-//!    refusing it as a valid item of the wrong shape (422), diverges. One
-//!    exception is decided by rule, not by message: a body whose only fault
-//!    is bytes after one complete item ([`faithful::Rule::Trailing`]) is
-//!    the documented behaviour of a backend whose
-//!    [`codecs::Backend::TRAILING`] is [`codecs::Trailing::Ignored`]; it is
-//!    counted ([`Tally::TrailingIgnored`]), not a divergence. Conformance
-//!    reports that policy.
+//!    be refused. Accepting it diverges. One exception is decided by rule,
+//!    not by message: a body whose only fault is bytes after one complete
+//!    item ([`faithful::Rule::Trailing`]) is the documented behaviour of a
+//!    backend whose [`codecs::Backend::TRAILING`] is
+//!    [`codecs::Trailing::Ignored`]; it is counted
+//!    ([`Tally::TrailingIgnored`]), not a divergence. Conformance reports
+//!    that policy.
 //! 2. A body the candidate and the oracle both accept must decode to the
 //!    same value, owned and borrowed, floats by bits and tags by number.
 //!
 //! Everything else is a loud answer, which conformance judges case by case:
-//! a well-formed body the candidate refuses (a depth limit, a validity rule,
-//! a type it cannot produce) whatever the oracle does, and a status class
-//! that differs from the oracle's on a well-formed body. Those differences
-//! are counted ([`Tally`]) and printed to stderr as `fuzz-tally` lines, so a
-//! run's log says how often each happened. The worked codec's own
+//! an ill-formed body refused as a valid item of the wrong shape (422, not
+//! 400), which section `wellformed` gates; a well-formed body the candidate
+//! refuses (a depth limit, a validity rule, a type it cannot produce)
+//! whatever the oracle does; and a status class that differs from the
+//! oracle's on a well-formed body. A refusal is not a silent difference, and
+//! panicking on the wrong class would spend a run reproducing the one
+//! finding `wellformed` already gates (every candidate answers some
+//! ill-formed bodies 422) instead of searching for the silent ones and for
+//! memory errors. Those answers are counted ([`Tally`]): each count is
+//! printed to stderr as a `fuzz-tally` line when it reaches a power of two,
+//! and, where [`TALLY_DIR_VAR`] names a directory, written there per
+//! process, so the run's record says how often each happened even from
+//! fork-mode workers, whose stderr libFuzzer does not relay. The worked codec's own
 //! data-model rules (`faithful::scan`'s 422s) are no library's duty, so they
 //! draw no line here.
 
@@ -86,12 +93,20 @@ pub fn run<C: Check>(data: &[u8]) {
     codecs::dispatch(candidate(), Run::<C>(data, PhantomData));
 }
 
+/// The environment variable naming the directory each process writes its
+/// tallies to (one file per process id, rewritten whenever a count reaches
+/// a power of two).
+pub const TALLY_DIR_VAR: &str = "FUZZ_TALLY_DIR";
+
 /// The loud answers and expected behaviours a run counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tally {
     /// Bytes after a complete item accepted by a backend that documents
     /// ignoring them (rule 1's exception).
     TrailingIgnored,
+    /// An ill-formed body refused as a valid item of the wrong shape: 422
+    /// where Kynos's taxonomy says 400. Section `wellformed` gates it.
+    IllFormedData,
     /// A well-formed body the candidate refused while the oracle accepted.
     RefusedWellFormed,
     /// A well-formed body both refused, with different status classes.
@@ -102,8 +117,9 @@ pub enum Tally {
 }
 
 impl Tally {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::TrailingIgnored,
+        Self::IllFormedData,
         Self::RefusedWellFormed,
         Self::OtherClass,
         Self::NotBorrowed,
@@ -112,6 +128,7 @@ impl Tally {
     fn name(self) -> &'static str {
         match self {
             Self::TrailingIgnored => "trailing-ignored",
+            Self::IllFormedData => "ill-formed-422",
             Self::RefusedWellFormed => "refused-well-formed",
             Self::OtherClass => "other-class",
             Self::NotBorrowed => "not-borrowed",
@@ -119,15 +136,26 @@ impl Tally {
     }
 }
 
-static TALLIES: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+static TALLIES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
-/// Count one `tally`, printing the count to stderr each time it reaches a
-/// power of two (so a long run's log stays short and still says how often).
+/// Count one `tally`. Each time the count reaches a power of two (so a long
+/// run's log stays short and still says how often) it is printed to stderr,
+/// and every count this process holds is written to its file under
+/// [`TALLY_DIR_VAR`], so the file is never more than a factor of two behind.
 pub fn tally(tally: Tally) {
     let index = Tally::ALL.iter().position(|t| *t == tally).unwrap_or(0);
     let count = TALLIES[index].fetch_add(1, Ordering::Relaxed) + 1;
     if count.is_power_of_two() {
         eprintln!("fuzz-tally {} {count} backend={}", tally.name(), candidate());
+        if let Some(dir) = std::env::var_os(TALLY_DIR_VAR) {
+            let counts: String = Tally::ALL
+                .iter()
+                .zip(&TALLIES)
+                .map(|(t, n)| format!("{} {}\n", t.name(), n.load(Ordering::Relaxed)))
+                .collect();
+            // A lost snapshot under-counts; it cannot fail the check.
+            let _ = std::fs::write(std::path::Path::new(&dir).join(std::process::id().to_string()), counts);
+        }
     }
 }
 
@@ -170,9 +198,7 @@ pub fn judge_form<B: Backend, T>(
 ) {
     match (form::<B>(data), answer) {
         (Form::IllFormed(refusal), Ok(_)) => panic!("{what}: accepted an ill-formed body ({refusal})"),
-        (Form::IllFormed(refusal), Err(failure)) if failure.class == Class::Data => {
-            panic!("{what}: answered an ill-formed body 422, not 400 ({refusal}; {failure})")
-        }
+        (Form::IllFormed(_), Err(failure)) if failure.class == Class::Data => tally(Tally::IllFormedData),
         (Form::TrailingIgnored, Ok(_)) => tally(Tally::TrailingIgnored),
         (Form::WellFormed, Err(failure)) => match oracle {
             Some(Ok(_)) => tally(Tally::RefusedWellFormed),

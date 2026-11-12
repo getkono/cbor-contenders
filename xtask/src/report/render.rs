@@ -646,6 +646,20 @@ fn model_section(data: &Data, out: &mut String) {
     table(out, &header, &rows);
 }
 
+/// A fuzz row's non-zero tallies, as `name n` pairs.
+fn tallies(tallies: &Value) -> String {
+    tallies
+        .as_object()
+        .map(|t| {
+            t.iter()
+                .filter(|(_, n)| n.as_u64().is_some_and(|n| n > 0))
+                .map(|(name, n)| format!("{name} {n}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default()
+}
+
 fn fuzz_section(data: &Data, out: &mut String) {
     section(
         out,
@@ -677,6 +691,7 @@ fn fuzz_section(data: &Data, out: &mut String) {
                     .unwrap_or("")
                     .to_owned(),
                 r["crash_input_hex"].as_str().map(code).unwrap_or_default(),
+                tallies(&r["tallies"]),
                 opt(r["corpus_files"].as_f64()),
             ]
         })
@@ -691,6 +706,7 @@ fn fuzz_section(data: &Data, out: &mut String) {
             "Divergences",
             "First assertion",
             "Smallest input",
+            "Loud answers (at least)",
             "Corpus files",
         ],
         &rows,
