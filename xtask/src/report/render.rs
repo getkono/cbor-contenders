@@ -702,11 +702,24 @@ fn fuzz_section(data: &Data, out: &mut String) {
             vec![
                 code(r["set"].as_str().unwrap_or("")),
                 r["outcome"].as_str().unwrap_or("").to_owned(),
+                miri_sections(&r["sections"]),
                 r["detail"].as_str().unwrap_or("").replace('|', "\\|"),
             ]
         })
         .collect();
-    table(out, &["Set", "Miri", "Detail"], &rows);
+    table(out, &["Set", "Miri", "Sections not run", "Detail"], &rows);
+}
+
+/// The sections Miri could not run, with the reason the runner gave.
+fn miri_sections(sections: &Value) -> String {
+    sections
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(name, outcome)| outcome["unsupported"].as_str().map(|why| format!("`{name}` ({why})")))
+        .collect::<Vec<_>>()
+        .join("; ")
+        .replace('|', "\\|")
 }
 
 #[expect(clippy::too_many_lines, reason = "the counted and the timed table")]

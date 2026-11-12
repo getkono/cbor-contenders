@@ -326,6 +326,9 @@ pub fn miri(args: &[String]) -> Result<()> {
         if !set.features.is_empty() {
             cmd.args(["--features", set.features]);
         }
+        // One test at a time, so a section that started and never finished is
+        // the one Miri stopped in.
+        cmd.args(["--", "--test-threads=1"]);
         let (ok, stdout, stderr) = capture(&mut cmd)?;
         let text = format!("{stdout}\n{stderr}");
         let outcome = if ok {
@@ -341,7 +344,8 @@ pub fn miri(args: &[String]) -> Result<()> {
             .lines()
             .find(|l| l.contains("Undefined Behavior") || l.contains("unsupported operation") || l.starts_with("error"))
             .map(str::to_owned);
-        rows.push(json!({ "set": set.name, "outcome": outcome, "detail": detail }));
+        let sections = miri_sections(&stdout, outcome);
+        rows.push(json!({ "set": set.name, "outcome": outcome, "detail": detail, "sections": sections }));
     }
     crate::util::merge_write(
         &root().join("results/miri.json"),
@@ -352,9 +356,40 @@ pub fn miri(args: &[String]) -> Result<()> {
     )
 }
 
+/// Each section's outcome under Miri, from the test runner's lines
+/// (`test <section> ... ok`, `... ignored, <reason>`, `... FAILED`): one test
+/// per section (`crates/conformance/tests/miri.rs`). Miri stops the process at
+/// the first undefined behaviour, so a section that started and never
+/// finished is the one `outcome` names.
+fn miri_sections(stdout: &str, outcome: &str) -> serde_json::Map<String, serde_json::Value> {
+    let mut sections = serde_json::Map::new();
+    for line in stdout.lines() {
+        let Some(rest) = line.strip_prefix("test ") else {
+            continue;
+        };
+        let Some((name, result)) = rest.split_once(" ... ") else {
+            if let Some(name) = rest.strip_suffix(" ...") {
+                sections.insert(name.trim().to_owned(), json!(outcome));
+            }
+            continue;
+        };
+        let result = if result == "ok" {
+            json!("pass")
+        } else if let Some(reason) = result.strip_prefix("ignored, ") {
+            json!({ "unsupported": reason })
+        } else if result == "ignored" {
+            json!({ "unsupported": "ignored" })
+        } else {
+            json!("fail")
+        };
+        sections.insert(name.trim().to_owned(), result);
+    }
+    sections
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FUZZ_TARGETS, Findings, crashes_since, finished_run, hex, runs};
+    use super::{FUZZ_TARGETS, Findings, crashes_since, finished_run, hex, miri_sections, runs};
     use crate::matrix::set;
 
     #[test]
@@ -372,6 +407,21 @@ mod tests {
         assert!(backends("minicbor")?.is_empty());
         assert!(backends("baseline")?.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn each_miri_section_is_recorded_with_its_outcome() {
+        let stdout = "running 3 tests\n\
+            test appendix ... ok\n\
+            test depth ... ignored, unsupported: depth re-executes the conform binary\n\
+            test strings ...";
+        let sections = miri_sections(stdout, "undefined-behavior");
+        assert_eq!(sections["appendix"], "pass");
+        assert_eq!(
+            sections["depth"]["unsupported"],
+            "unsupported: depth re-executes the conform binary"
+        );
+        assert_eq!(sections["strings"], "undefined-behavior");
     }
 
     #[test]
