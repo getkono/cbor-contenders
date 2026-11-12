@@ -171,11 +171,17 @@ impl<B: Backend> payloads::Visit for Visit<'_, B> {
 /// Run the section.
 #[must_use]
 pub fn run<B: Backend>() -> Section {
+    run_on::<B>(payloads::ALL)
+}
+
+/// The section over `names` only: a slice small enough for Miri.
+#[must_use]
+pub fn run_on<B: Backend>(names: &[&str]) -> Section {
     let mut section = Section::new("encode_diff");
     if !B::ENCODES {
         section.note("decode-only backend: encode checks skipped, decode checks run");
     }
-    for name in payloads::ALL {
+    for name in names {
         payloads::dispatch(
             name,
             Visit::<B> {

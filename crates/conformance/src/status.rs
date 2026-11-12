@@ -61,6 +61,21 @@ pub fn run<B: Backend>() -> Section {
     truncations::<B, JsonSmall>(&mut section);
     truncations::<B, EchoPost>(&mut section);
     truncations::<B, JsonLarge>(&mut section);
+    wrong_shape::<B>(&mut section);
+    section
+}
+
+/// The section over `json-small` and the wrong shape only: a slice small
+/// enough for Miri.
+#[must_use]
+pub fn small<B: Backend>() -> Section {
+    let mut section = Section::new("status");
+    truncations::<B, JsonSmall>(&mut section);
+    wrong_shape::<B>(&mut section);
+    section
+}
+
+fn wrong_shape<B: Backend>(section: &mut Section) {
     let shape = payloads::reject::RejectShape::bytes(Format::Cbor);
     let borrowing = borrows::<B, BorrowedForm<JsonLarge>>(&JsonLarge::bytes(Format::Cbor));
     for arrival in ARRIVALS {
@@ -84,5 +99,4 @@ pub fn run<B: Backend>() -> Section {
             }
         }
     }
-    section
 }
