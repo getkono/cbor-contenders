@@ -29,11 +29,29 @@ static ALLOCATOR: alloc_count::Counting = alloc_count::Counting;
 /// Random floats per backend: enough to cross every number path.
 const SAMPLES: usize = 1_000;
 
-/// Run `section` for every candidate this build has.
+/// Run `section` for every candidate this build has, on a thread with the
+/// suite's stack, as `conform` runs it (`Suite::run_backend`): the suite's
+/// own recursion over `nested-10000` is not what this checks.
 fn each(section: fn(&str) -> Option<Section>) {
-    for name in codecs::cbor_candidates() {
-        let _ = section(name);
-    }
+    on_suite_stack(|| {
+        for name in codecs::cbor_candidates() {
+            let _ = section(name);
+        }
+    });
+}
+
+/// Run `body` on a thread with [`conformance::SUITE_STACK`], propagating its
+/// panic.
+fn on_suite_stack(body: impl FnOnce() + Send) {
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(conformance::SUITE_STACK)
+            .spawn_scoped(scope, body)
+            .expect("spawns the suite thread");
+        if let Err(panic) = handle.join() {
+            std::panic::resume_unwind(panic);
+        }
+    });
 }
 
 /// A section as a function of the backend's name.
@@ -53,6 +71,10 @@ macro_rules! by_name {
 #[test]
 fn appendix_a() {
     let rows = appendix::load(&appendix::default_dir()).expect("the transcription verifies");
+    on_suite_stack(|| appendix_on(&rows));
+}
+
+fn appendix_on(rows: &[appendix::Row]) {
     for name in codecs::cbor_candidates() {
         struct Run<'a>(&'a [appendix::Row]);
         impl Visit for Run<'_> {
@@ -61,7 +83,7 @@ fn appendix_a() {
                 appendix::run::<B>(self.0)
             }
         }
-        let _ = codecs::dispatch(name, Run(&rows));
+        let _ = codecs::dispatch(name, Run(rows));
     }
 }
 
