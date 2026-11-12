@@ -214,15 +214,125 @@ pub fn judge_form<B: Backend, T>(
 /// number: a tag on one side only, or another tag number, differs.
 #[must_use]
 pub fn same(a: &serde_cbor::Value, b: &serde_cbor::Value) -> bool {
+    same_in(a, b, &[])
+}
+
+/// One bignum in a body: tag 2 or 3 and its byte string's content.
+pub type Bignum = (u64, Vec<u8>);
+
+/// [`same`], for a candidate's value `a` and the oracle's `b` decoded from a
+/// body holding `bignums` (see [`bignums`]).
+///
+/// The oracle is built without serde_cbor's `tags` feature, so it drops every
+/// tag and reads a bignum as its byte string. A library that reads tags 2
+/// and 3 as RFC 8949 section 3.4.3 says (`n` and `-1 - n`, `n` the bytes as
+/// a big-endian unsigned integer) gives an integer there instead. That
+/// integer matches the oracle's bytes only when the body holds that bignum
+/// with that tag and the integer is its value, so a wrong value, sign or
+/// width still differs.
+#[must_use]
+pub fn same_in(a: &serde_cbor::Value, b: &serde_cbor::Value, bignums: &[Bignum]) -> bool {
     use serde_cbor::Value;
+    let same = |a, b| same_in(a, b, bignums);
     match (a, b) {
         (Value::Float(x), Value::Float(y)) => x.to_bits() == y.to_bits() || x.is_nan() && y.is_nan(),
         (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y)),
+        // Pairwise in order first; a bignum key read as an integer sorts
+        // elsewhere in the candidate's map than its bytes do in the oracle's,
+        // so failing that, each entry must match one in the other map.
         (Value::Map(x), Value::Map(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|((kx, vx), (ky, vy))| same(kx, ky) && same(vx, vy))
+            x.len() == y.len()
+                && (x.iter().zip(y).all(|((kx, vx), (ky, vy))| same(kx, ky) && same(vx, vy))
+                    || !bignums.is_empty()
+                        && x.iter()
+                            .all(|(kx, vx)| y.iter().any(|(ky, vy)| same(kx, ky) && same(vx, vy))))
         }
         (Value::Tag(m, x), Value::Tag(n, y)) => m == n && same(x, y),
+        (Value::Integer(v), Value::Bytes(bytes)) => bignums
+            .iter()
+            .any(|(tag, content)| content == bytes && bignum_value(*tag, content) == Some(*v)),
         _ => a == b,
+    }
+}
+
+/// A bignum's value (RFC 8949 section 3.4.3), where it fits an `i128`.
+fn bignum_value(tag: u64, content: &[u8]) -> Option<i128> {
+    let n = content
+        .iter()
+        .try_fold(0i128, |n, &byte| n.checked_mul(256)?.checked_add(i128::from(byte)))?;
+    match tag {
+        2 => Some(n),
+        3 => Some(-1 - n),
+        _ => None,
+    }
+}
+
+/// Every bignum in `body`'s first item: each tag 2 or 3 whose content is a
+/// byte string (definite, or indefinite with its chunks joined). It reads
+/// heads in order, which for a well-formed body visits every item; on a
+/// head it cannot read it stops, with what it found so far.
+#[must_use]
+pub fn bignums(body: &[u8]) -> Vec<Bignum> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some((major, minor, arg, next)) = head(body, at) {
+        at = next;
+        match (major, minor) {
+            // A definite byte or text string: skip its content.
+            (2 | 3, 0..=27) => at = at.saturating_add(usize::try_from(arg).unwrap_or(usize::MAX)),
+            (6, _) if arg == 2 || arg == 3 => {
+                if let Some((content, next)) = byte_string(body, at) {
+                    found.push((arg, content));
+                    at = next;
+                }
+            }
+            _ => {}
+        }
+        if at > body.len() {
+            break;
+        }
+    }
+    found
+}
+
+/// The head at `at`: major type, additional information, argument (the
+/// length, value or tag number; a float's bits), and where its content or
+/// the next head begins.
+fn head(body: &[u8], at: usize) -> Option<(u8, u8, u64, usize)> {
+    let initial = *body.get(at)?;
+    let (major, minor) = (initial >> 5, initial & 0x1f);
+    let width = match minor {
+        0..=23 => return Some((major, minor, u64::from(minor), at + 1)),
+        24 => 1,
+        25 => 2,
+        26 => 4,
+        27 => 8,
+        31 => return Some((major, minor, 0, at + 1)),
+        _ => return None,
+    };
+    let bytes = body.get(at + 1..at + 1 + width)?;
+    let arg = bytes.iter().fold(0u64, |n, &b| (n << 8) | u64::from(b));
+    Some((major, minor, arg, at + 1 + width))
+}
+
+/// The byte string at `at`, and where it ends.
+fn byte_string(body: &[u8], at: usize) -> Option<(Vec<u8>, usize)> {
+    let (major, minor, arg, mut at) = head(body, at)?;
+    if major != 2 {
+        return None;
+    }
+    if minor != 31 {
+        let end = at.checked_add(usize::try_from(arg).ok()?)?;
+        return Some((body.get(at..end)?.to_vec(), end));
+    }
+    let mut content = Vec::new();
+    loop {
+        if *body.get(at)? == 0xff {
+            return Some((content, at + 1));
+        }
+        let (chunk, next) = byte_string(body, at)?;
+        content.extend(chunk);
+        at = next;
     }
 }
 
@@ -230,7 +340,39 @@ pub fn same(a: &serde_cbor::Value, b: &serde_cbor::Value) -> bool {
 mod tests {
     use serde_cbor::Value;
 
-    use super::same;
+    use super::{bignums, same, same_in};
+
+    /// The fuzzer's first find: tag 3 on an empty byte string is -1.
+    #[test]
+    fn a_bignum_read_as_its_value_matches_the_oracles_bytes() {
+        let body = [0xc3, 0x40];
+        let found = bignums(&body);
+        assert_eq!(found, vec![(3, vec![])]);
+        let bytes = Value::Bytes(vec![]);
+        assert!(same_in(&Value::Integer(-1), &bytes, &found));
+        // The wrong sign, the wrong value, or no bignum in the body differs.
+        assert!(!same_in(&Value::Integer(0), &bytes, &found));
+        assert!(!same_in(&Value::Integer(-1), &bytes, &[(2, vec![])]));
+        assert!(!same(&Value::Integer(-1), &bytes));
+        // Nested, indefinite, and as a map key that sorts elsewhere.
+        let body = [
+            0xa1, 0xc2, 0x5f, 0x41, 0x01, 0x41, 0x00, 0xff, 0x82, 0xc3, 0x41, 0x01, 0x00,
+        ];
+        let found = bignums(&body);
+        assert_eq!(found, vec![(2, vec![1, 0]), (3, vec![1])]);
+        let map = |key, value| Value::Map(std::iter::once((key, value)).collect());
+        let candidate = map(
+            Value::Integer(256),
+            Value::Array(vec![Value::Integer(-2), Value::Integer(0)]),
+        );
+        let oracle = map(
+            Value::Bytes(vec![1, 0]),
+            Value::Array(vec![Value::Bytes(vec![1]), Value::Integer(0)]),
+        );
+        assert!(same_in(&candidate, &oracle, &found));
+        // A byte string's content is skipped, not read as heads.
+        assert!(bignums(&[0x42, 0xc2, 0x41]).is_empty());
+    }
 
     #[test]
     fn tags_are_compared_by_number() {

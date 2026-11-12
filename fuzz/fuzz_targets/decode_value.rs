@@ -7,7 +7,7 @@
 
 use codecs::Backend;
 use codecs::backend::serde_cbor::SerdeCbor;
-use fuzz::{Check, judge_form, same};
+use fuzz::{Check, bignums, judge_form, same_in};
 use libfuzzer_sys::fuzz_target;
 use serde::de::IgnoredAny;
 
@@ -24,7 +24,7 @@ impl Check for DecodeValue {
         judge_form::<B, _>(data, "ignored", &skipped, Some(&oracle_skipped));
         if let (Ok(candidate), Ok(oracle)) = (candidate, oracle) {
             assert!(
-                same(&candidate, &oracle),
+                same_in(&candidate, &oracle, &bignums(data)),
                 "value differs from the oracle's: {candidate:?} vs {oracle:?}"
             );
         }
