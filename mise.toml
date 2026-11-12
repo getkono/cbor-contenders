@@ -77,9 +77,14 @@ run = "rm -rf target/matrix/container target/callgrind && cargo xtask count --ch
 
 [tasks.sensitivity]
 description = "The harness-can-fail checks under callgrind, in the container"
+# podman, else docker, as `xtask` picks; core dumps off, as `xtask` runs the
+# container, since valgrind writes one into the mounted checkout per client
+# a signal kills.
 run = """
+set -e
 cargo xtask image
-podman run --rm --security-opt label=disable -v "$PWD:/work" -v "${CARGO_HOME:-$HOME/.cargo}/registry:/usr/local/cargo/registry" cbor-contenders:valgrind cargo test -p cell --locked --features count-alloc -- --ignored sensitivity
+if podman --version >/dev/null 2>&1; then engine=podman; else engine=docker; fi
+"$engine" run --rm --security-opt label=disable --ulimit core=0 -v "$PWD:/work" -v "${CARGO_HOME:-$HOME/.cargo}/registry:/usr/local/cargo/registry" cbor-contenders:valgrind cargo test -p cell --locked --features count-alloc -- --ignored sensitivity
 """
 
 [tasks.alloc]
