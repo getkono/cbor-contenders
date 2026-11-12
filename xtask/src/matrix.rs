@@ -94,12 +94,6 @@ pub fn set(name: &str) -> anyhow::Result<&'static Set> {
         .ok_or_else(|| anyhow::anyhow!("no set named {name}"))
 }
 
-/// Label a backend as reported.
-#[must_use]
-pub fn label(_set: &Set, backend: &str) -> String {
-    backend.into()
-}
-
 /// One `-C target-cpu` choice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Variant {

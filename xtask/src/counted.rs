@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use crate::build::{Place, bin, build};
-use crate::matrix::{SETS, SHAPES, Set, Shape, Variant, label, variants};
+use crate::matrix::{SETS, SHAPES, Set, Shape, Variant, variants};
 use crate::util::{capture, parallel, root};
 
 /// Cache geometry passed to callgrind explicitly, so the estimated-cycles
@@ -114,7 +114,7 @@ impl Cell {
         json!({
             "variant": variant,
             "set": self.set.name,
-            "backend": label(self.set, self.backend),
+            "backend": self.backend,
             "workload": self.workload,
             "op": self.shape.op,
             "form": self.shape.form,

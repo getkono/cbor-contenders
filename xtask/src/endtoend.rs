@@ -39,11 +39,6 @@ pub fn backends(set: &crate::matrix::Set) -> Vec<&'static str> {
     b
 }
 
-/// Routes an entry serves: every one.
-pub fn routes_for(_entry: &str) -> Vec<&'static (&'static str, &'static str, &'static str, Option<&'static str>)> {
-    ROUTES.iter().collect()
-}
-
 /// The format an entry reads and writes: its body files' extension and
 /// media type.
 #[must_use]
@@ -73,13 +68,12 @@ pub fn count(args: &[String]) -> Result<()> {
             std::fs::create_dir_all(&scratch)?;
             let mut jobs: Vec<Box<dyn FnOnce() -> Value + Send>> = Vec::new();
             for backend in backends(set) {
-                for route in routes_for(backend) {
+                for route in ROUTES {
                     let exe = exe.clone();
                     let out = scratch.join(format!("{backend}-{}.out", route.0));
                     let (variant, set_name) = (variant.name, set.name);
                     jobs.push(Box::new(move || {
-                        let label = crate::matrix::label(set, backend);
-                        let mut row = json!({ "variant": variant, "set": set_name, "backend": label, "route": route.0, "requests": requests });
+                        let mut row = json!({ "variant": variant, "set": set_name, "backend": backend, "route": route.0, "requests": requests });
                         let mut cmd = Command::new("valgrind");
                         counted_env(&mut cmd).args(["--tool=callgrind", "--collect-atstart=no", "--toggle-collect=*e2e_measured*", "--cache-sim=yes"])
                             .args(CACHE)
@@ -336,7 +330,6 @@ pub const SECONDS: u64 = 30;
 /// `xtask e2e-time`: closed-loop throughput, then open-loop latency at 70 % of
 /// serde_json's throughput on the same route, `--reps` times (default 5),
 /// with serde_json run twice per rep as the A/A control.
-#[expect(clippy::too_many_lines, reason = "build, calibrate, then the shuffled reps")]
 pub fn time(args: &[String]) -> Result<()> {
     let mut filter = Filter::parse(args);
     if filter.variants.is_none() {
@@ -378,7 +371,7 @@ pub fn time(args: &[String]) -> Result<()> {
         for set in served(&filter) {
             let exe = bin(&build(Place::Host, "e2e", set, &variant)?, "e2e-server");
             for backend in backends(set) {
-                servers.push((set.name, crate::matrix::label(set, backend), exe.clone()));
+                servers.push((set.name, backend.to_owned(), exe.clone()));
                 if set.name == "baseline" && ["serde_json", "prost"].contains(&backend) {
                     servers.push((set.name, format!("{backend}#aa"), exe.clone()));
                 }
@@ -391,10 +384,7 @@ pub fn time(args: &[String]) -> Result<()> {
     let mut rows = Vec::new();
     for (variant, servers) in built {
         for route in ROUTES {
-            let eligible: Vec<_> = servers
-                .iter()
-                .filter(|(_, b, _)| routes_for(server_name(b)).iter().any(|r| r.0 == route.0))
-                .collect();
+            let eligible: Vec<_> = servers.iter().collect();
             let mut results: Vec<Vec<Value>> = vec![Vec::new(); eligible.len()];
             let serde_json = eligible
                 .iter()

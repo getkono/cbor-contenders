@@ -298,7 +298,7 @@ mod tests {
     fn a_harness_failure_is_a_note() {
         let mut data = Data::default();
         data.host.conformance.insert(
-            ("v3".into(), "cbor2".into()),
+            ("portable".into(), "cbor2".into()),
             json!({ "backends": { "cbor2": { "gate": "error", "error": "wait failed" } } }),
         );
         let notes = conformance(&data).notes;

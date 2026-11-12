@@ -58,7 +58,7 @@ pub fn wire(args: &[String]) -> Result<()> {
                     row["gzip"] = json!(gzip(&bytes)?);
                     row["zstd"] = json!(zstd(&bytes)?);
                     row["preferred"] = json!(
-                        crate::endtoend::format_of(backend) == codecs::Format::Cbor && faithful_preferred(&bytes)
+                        crate::endtoend::format_of(backend) == codecs::Format::Cbor && faithful::preferred(&bytes)
                     );
                 } else {
                     row["error"] = json!(String::from_utf8_lossy(&out.stderr).trim().to_owned());
@@ -74,12 +74,6 @@ pub fn wire(args: &[String]) -> Result<()> {
         &["set", "backend", "workload"],
         json!({ "gzip_level": GZIP_LEVEL, "zstd_level": ZSTD_LEVEL }),
     )
-}
-
-/// Whether CBOR bytes are preferred serialization, by `payloads`' test of
-/// the same name: the shortest head and float, definite lengths.
-fn faithful_preferred(bytes: &[u8]) -> bool {
-    faithful::preferred(bytes)
 }
 
 #[cfg(test)]

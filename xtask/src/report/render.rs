@@ -469,7 +469,7 @@ fn conformance_section(data: &Data, out: &mut String) {
         }
     }
     let mut rows = Vec::new();
-    for ((variant, set), report) in &data.host.conformance {
+    for ((variant, _), report) in &data.host.conformance {
         for (name, entry) in report["backends"].as_object().into_iter().flatten() {
             let mut row = vec![
                 code(name),
@@ -479,7 +479,6 @@ fn conformance_section(data: &Data, out: &mut String) {
             for s in &sections {
                 row.push(opt(entry["sections"][s]["gating_failure_count"].as_f64()));
             }
-            let _ = set;
             rows.push(row);
         }
     }
@@ -522,32 +521,30 @@ fn conformance_section(data: &Data, out: &mut String) {
          skipped, on 2 MiB and 8 MiB stacks (none is gated but a crash).",
     );
     let mut rows = Vec::new();
-    if let Some(((_, _), _)) = data.host.conformance.iter().next() {
-        for ((variant, _), report) in data.host.conformance.iter().filter(|((v, _), _)| v == DECIDING_VARIANT) {
-            for (name, entry) in report["backends"].as_object().into_iter().flatten() {
-                let limits = &entry["sections"]["depth"]["data"]["limits"]["backend"];
-                let series = |s: &str| {
-                    let l = &limits[s];
-                    format!(
-                        "{} / {} / {}",
-                        l["max_accepted"].as_u64().map_or_else(|| "–".into(), |n| n.to_string()),
-                        l["first_rejected"]
-                            .as_u64()
-                            .map_or_else(|| "–".into(), |n| n.to_string()),
-                        l["first_crashed"]
-                            .as_u64()
-                            .map_or_else(|| "–".into(), |n| n.to_string()),
-                    )
-                };
-                rows.push(vec![
-                    code(name),
-                    variant.clone(),
-                    entry["trailing"].as_str().unwrap_or("?").to_owned(),
-                    series("array/value/2MiB"),
-                    series("array/ignored/2MiB"),
-                    series("object/value/8MiB"),
-                ]);
-            }
+    for ((variant, _), report) in data.host.conformance.iter().filter(|((v, _), _)| v == DECIDING_VARIANT) {
+        for (name, entry) in report["backends"].as_object().into_iter().flatten() {
+            let limits = &entry["sections"]["depth"]["data"]["limits"]["backend"];
+            let series = |s: &str| {
+                let l = &limits[s];
+                format!(
+                    "{} / {} / {}",
+                    l["max_accepted"].as_u64().map_or_else(|| "–".into(), |n| n.to_string()),
+                    l["first_rejected"]
+                        .as_u64()
+                        .map_or_else(|| "–".into(), |n| n.to_string()),
+                    l["first_crashed"]
+                        .as_u64()
+                        .map_or_else(|| "–".into(), |n| n.to_string()),
+                )
+            };
+            rows.push(vec![
+                code(name),
+                variant.clone(),
+                entry["trailing"].as_str().unwrap_or("?").to_owned(),
+                series("array/value/2MiB"),
+                series("array/ignored/2MiB"),
+                series("object/value/8MiB"),
+            ]);
         }
     }
     table(

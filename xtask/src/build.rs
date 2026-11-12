@@ -136,7 +136,11 @@ fn measured_build(package: &str, features: &str, rustflags: &str, dir: &Path) ->
 
 /// Build `package` for `set` at `variant`; returns the release directory.
 pub fn build(place: Place, package: &str, set: &Set, variant: &Variant) -> Result<PathBuf> {
-    build_with(place, package, set, variant, None)
+    let dir = target_dir(place, variant, set);
+    let mut cmd = measured_build(package, set.features, variant.rustflags, &dir)?;
+    run(&mut cmd).with_context(|| format!("building {package} for {} at {}", set.name, variant.name))?;
+    check_features(package, set.features, set.name, "")?;
+    Ok(dir.join("release"))
 }
 
 /// [`build`], with `feature` of `package` switched on as well, in its own
@@ -153,15 +157,6 @@ pub fn build_featured(place: Place, package: &str, set: &Set, variant: &Variant,
     let mut cmd = measured_build(package, &features, variant.rustflags, &dir)?;
     run(&mut cmd).with_context(|| format!("building {package} +{feature} for {} at {}", set.name, variant.name))?;
     check_features(package, &features, set.name, feature)?;
-    Ok(dir.join("release"))
-}
-
-/// [`build`] itself.
-pub fn build_with(place: Place, package: &str, set: &Set, variant: &Variant, _: Option<()>) -> Result<PathBuf> {
-    let dir = target_dir(place, variant, set);
-    let mut cmd = measured_build(package, set.features, variant.rustflags, &dir)?;
-    run(&mut cmd).with_context(|| format!("building {package} for {} at {}", set.name, variant.name))?;
-    check_features(package, set.features, set.name, "")?;
     Ok(dir.join("release"))
 }
 
